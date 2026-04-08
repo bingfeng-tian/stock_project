@@ -1,0 +1,35 @@
+{
+  "ticker": "2330.TW",
+  "train_start": "2018-01-01",
+  "train_end": "2026-04-04",
+  "seq_len": 30,
+  "hold_days": 5,
+  "feature_cols": [
+    "EMA_20",
+    "EMA_60",
+    "EMA_trend",
+    "BB_upper",
+    "BB_mid",
+    "BB_lower",
+    "BB_width",
+    "BB_pct",
+    "BB_above_upper",
+    "BB_below_lower",
+    "VOL_ratio",
+    "VOL_log",
+    "Return_1d",
+    "Return_5d",
+    "Return_10d",
+    "High_Low_range",
+    "Signal_buy",
+    "Signal_sell"
+  ],
+  "best_threshold": 0.3,
+  "arima_order": [
+    2,
+    1,
+    2
+  ],
+  "saved_at": "2026-04-04 07:18:40",
+  "train_mode": "strategy4_signal"
+}
