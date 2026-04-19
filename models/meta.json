@@ -1,7 +1,7 @@
 {
   "ticker": "2330.TW",
   "train_start": "2018-01-01",
-  "train_end": "2026-04-04",
+  "train_end": "2026-04-19",
   "seq_len": 30,
   "hold_days": 5,
   "feature_cols": [
@@ -15,6 +15,7 @@
     "BB_pct",
     "BB_above_upper",
     "BB_below_lower",
+    "BB_squeeze",
     "VOL_ratio",
     "VOL_log",
     "Return_1d",
@@ -24,12 +25,13 @@
     "Signal_buy",
     "Signal_sell"
   ],
-  "best_threshold": 0.3,
+  "best_threshold": 0.46000000000000013,
   "arima_order": [
     2,
     1,
     2
   ],
-  "saved_at": "2026-04-04 07:18:40",
-  "train_mode": "strategy4_signal"
+  "saved_at": "2026-04-19 14:32:17",
+  "train_mode": "bb_signal_mean_reversion",
+  "signal_logic": "buy=close<=BB_lower, sell=close>=BB_upper"
 }

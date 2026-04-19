@@ -2,8 +2,14 @@
 data_loader.py
 Responsible for:
   1. Download stock data from yfinance
-  2. Compute Strategy 4 technical indicators (EMA + BBand + VOL)
-  3. Generate training samples based on Strategy 4 buy signal
+  2. Compute Bollinger Band primary technical indicators (BB + EMA + VOL)
+  3. Generate training samples based on BB buy signal (mean reversion)
+
+BB Signal Logic (mean reversion):
+  Buy  signal : close <= BB_lower  (oversold, expect upward reversion)
+  Sell signal : close >= BB_upper  (overbought, expect downward reversion)
+
+Model predicts: when BB buy signal triggers, will holding N days be profitable?
 """
 
 import numpy as np
@@ -17,7 +23,7 @@ from datetime import datetime
 FEATURE_COLS = [
     "EMA_20", "EMA_60", "EMA_trend",
     "BB_upper", "BB_mid", "BB_lower", "BB_width", "BB_pct",
-    "BB_above_upper", "BB_below_lower",
+    "BB_above_upper", "BB_below_lower", "BB_squeeze",
     "VOL_ratio", "VOL_log",
     "Return_1d", "Return_5d", "Return_10d",
     "High_Low_range",
@@ -70,19 +76,25 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     df["BB_lower"]       = bb.bollinger_lband()
     df["BB_width"]       = (df["BB_upper"] - df["BB_lower"]) / df["BB_mid"]
     df["BB_pct"]         = bb.bollinger_pband()
-    df["BB_above_upper"] = (close > df["BB_upper"]).astype(int)
-    df["BB_below_lower"] = (close < df["BB_lower"]).astype(int)
+    df["BB_above_upper"] = (close >= df["BB_upper"]).astype(int)
+    df["BB_below_lower"] = (close <= df["BB_lower"]).astype(int)
+
+    # BB Squeeze: BB_width is narrower than its 20-day average * 0.85
+    # → low volatility period, often precedes a breakout
+    bb_width_ma          = df["BB_width"].rolling(20).mean()
+    df["BB_squeeze"]     = (df["BB_width"] < bb_width_ma * 0.85).astype(int)
 
     # Volume
     df["VOL_MA20"]  = volume.rolling(20).mean()
     df["VOL_ratio"] = volume / df["VOL_MA20"]
     df["VOL_log"]   = np.log1p(volume)
 
-    # Strategy 4 signals
-    df["Signal_buy"]  = ((df["EMA_trend"] == 1) &
-                         (df["BB_above_upper"] == 1)).astype(int)
-    df["Signal_sell"] = ((df["EMA_trend"] == 0) |
-                         (df["BB_below_lower"] == 1)).astype(int)
+    # ── BB Primary Signals (mean reversion) ──────────────────
+    # Buy  signal: close <= BB_lower → price is oversold, expect upward reversion
+    # Sell signal: close >= BB_upper → price is overbought, expect downward reversion
+    # EMA trend remains as a FEATURE for the model (context), not as a gate
+    df["Signal_buy"]  = df["BB_below_lower"]   # 接觸下軌 → 超賣買訊
+    df["Signal_sell"] = df["BB_above_upper"]   # 接觸上軌 → 超買賣訊
 
     # Price features
     df["Return_1d"]      = close.pct_change(1)
@@ -98,16 +110,17 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 def compute_signal_labels(df: pd.DataFrame,
                           hold_days: int = 5) -> pd.DataFrame:
     """
-    Generate training samples based on Strategy 4 buy signal.
+    Generate training samples based on BB buy signal (mean reversion).
 
-    NEW LABEL LOGIC:
-      Only on days where Signal_buy=1:
-        Label = 1  if close[t + hold_days] > close[t]  (profitable)
-        Label = 0  if close[t + hold_days] <= close[t] (unprofitable)
+    LABEL LOGIC:
+      Only on days where Signal_buy=1 (close <= BB_lower):
+        Label = 1  if close[t + hold_days] > close[t]  (profitable, reversion worked)
+        Label = 0  if close[t + hold_days] <= close[t] (unprofitable, reversion failed)
 
     This means:
-      - Training data is filtered to Signal_buy days only
-      - LSTM learns: "when Strategy 4 triggers, will holding N days be profitable?"
+      - Training data is filtered to BB lower-band touch days only
+      - LSTM learns: "when BB buy signal triggers, will holding N days be profitable?"
+      - Model captures context: EMA trend, BB squeeze, volume, recent returns, etc.
 
     Args:
         df        : DataFrame from compute_features()
@@ -129,13 +142,14 @@ def compute_signal_labels(df: pd.DataFrame,
     signal_df = signal_df.iloc[:-hold_days] if len(signal_df) > hold_days else signal_df
     signal_df.dropna(subset=["Label"], inplace=True)
 
-    print(f"\n  [Signal Labels] hold_days = {hold_days}")
+    print(f"\n  [BB Signal Labels] hold_days = {hold_days}")
+    print(f"  BB Signal type        : Mean Reversion (close <= BB_lower)")
     print(f"  Total trading days    : {len(df)}")
-    print(f"  Signal_buy triggered  : {len(signal_df)} days")
+    print(f"  BB buy signal days    : {len(signal_df)} days  (close touched lower band)")
     print(f"  Signal rate           : {len(signal_df)/len(df):.2%}")
     if len(signal_df) > 0:
         up_pct = signal_df["Label"].mean()
-        print(f"  Profitable signals    : {up_pct:.2%}")
+        print(f"  Profitable signals    : {up_pct:.2%}  (reversion succeeded)")
         print(f"  Sample dates (first 5):")
         for d in signal_df.index[:5]:
             print(f"    {d.date()}  close={float(close[d]):.0f}  "

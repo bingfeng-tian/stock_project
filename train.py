@@ -1,21 +1,23 @@
 """
-train.py - Main training script (Strategy 4 signal-based)
+train.py - Main training script (Bollinger Band primary signal)
 
-NEW TRAINING LOGIC:
-  Instead of predicting tomorrow's up/down every day,
-  the model now learns from Strategy 4 buy signal days only.
+TRAINING LOGIC:
+  Model learns from BB buy signal days only.
+  BB buy signal = close <= BB_lower (price touches lower band → oversold)
 
-  Label = "will holding N days after this buy signal be profitable?"
+  Label = "will holding N days after this BB signal be profitable?"
+          1 = price rises (mean reversion succeeds)
+          0 = price falls (mean reversion fails)
 
-  This aligns with the paper's actual trading logic:
-    - Enter when Strategy 4 buy signal triggers
-    - Hold for N days (or until sell signal)
-    - Goal: predict if this trade will be profitable
+  This aligns with the BB mean reversion trading logic:
+    - Enter when BB buy signal triggers (close touches lower band)
+    - Hold for N days (or until BB sell signal at upper band)
+    - Goal: predict if this BB trade will result in a gain
 
 Flow:
-  1. data_loader  -> download + compute features
-  2. data_loader  -> filter signal days + compute hold-N-day labels
-  3. lstm_model   -> train on signal days only
+  1. data_loader  -> download + compute features (BB primary signals)
+  2. data_loader  -> filter BB signal days + compute hold-N-day labels
+  3. lstm_model   -> train on BB signal days only
   4. arima_model  -> rolling forecast on test set (all days)
   5. stacking     -> OOF + Meta Model
   6. Save models
@@ -78,7 +80,8 @@ def save_meta(df, best_thr, end_label):
         "best_threshold" : float(best_thr),
         "arima_order"    : list(ARIMA_ORDER),
         "saved_at"       : datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "train_mode"     : "strategy4_signal",
+        "train_mode"     : "bb_signal_mean_reversion",  # BB primary signal
+        "signal_logic"   : "buy=close<=BB_lower, sell=close>=BB_upper",
     }
     path = os.path.join(MODEL_DIR, "meta.json")
     with open(path, "w", encoding="utf-8") as f:
@@ -218,8 +221,9 @@ def main():
         )
 
     print(f"\nTraining complete!")
-    print(f"  Model predicts: profitability of Strategy 4 buy signals")
-    print(f"  Run predict.py to check today's signal\n")
+    print(f"  Signal logic  : BB mean reversion (buy at lower band, sell at upper band)")
+    print(f"  Model predicts: will BB buy signal be profitable after {HOLD_DAYS} days?")
+    print(f"  Run predict.py to check today's BB signal\n")
 
 
 if __name__ == "__main__":

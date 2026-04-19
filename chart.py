@@ -5,9 +5,9 @@ Responsible for:
   Reads model predictions, outputs PNG files to charts/ folder.
 
 Charts produced:
-  chart1_price_indicators.png  - Price + EMA + Bollinger Band
+  chart1_price_indicators.png  - Price + EMA + Bollinger Band (with BB signals marked)
   chart2_lstm_training.png     - LSTM training curve
-  chart3_lstm_prediction.png   - LSTM prediction vs actual
+  chart3_lstm_prediction.png   - LSTM prediction vs actual (BB signal days)
   chart4_arima_prediction.png  - ARIMA prediction vs actual
   chart5_metrics_comparison.png- LSTM vs ARIMA vs Stacking bar chart
   chart6_stacking_result.png   - Stacking detail + Meta Model weights
@@ -52,7 +52,21 @@ def plot_price_indicators(df, test_start_idx: int,
     ax.axvline(df.index[test_start_idx], color="gray",
                ls=":", lw=1.5, label="Train/Test Split")
 
-    ax.set_title(f"[{ticker}] Price + EMA + Bollinger Band  ({start_date} ~ {end_date})")
+    # Mark BB buy signals (close <= lower band) on price chart
+    signal_buy_mask  = df["Signal_buy"] == 1
+    signal_sell_mask = df["Signal_sell"] == 1
+    if signal_buy_mask.any():
+        ax.scatter(df.index[signal_buy_mask],
+                   close_all[signal_buy_mask],
+                   marker="^", color="#4CAF50", s=60, zorder=5,
+                   label="BB Buy Signal (lower band touch)")
+    if signal_sell_mask.any():
+        ax.scatter(df.index[signal_sell_mask],
+                   close_all[signal_sell_mask],
+                   marker="v", color="#F44336", s=60, zorder=5,
+                   label="BB Sell Signal (upper band touch)")
+
+    ax.set_title(f"[{ticker}] BB Primary Signal  |  ▲Buy=lower touch  ▼Sell=upper touch  ({start_date} ~ {end_date})")
     ax.set_ylabel("Price (TWD)")
     ax.legend(loc="upper left", fontsize=9)
     ax.grid(alpha=0.3)
@@ -116,7 +130,8 @@ def plot_lstm_prediction(df, test_start_idx, y_te,
     axes[1].set_title("LSTM Up/Down Prediction")
     axes[1].legend(fontsize=9); axes[1].grid(alpha=0.3)
 
-    fig.suptitle(f"[{ticker}] LSTM Results", fontsize=13, fontweight="bold")
+    fig.suptitle(f"[{ticker}] LSTM Results  (trained on BB buy signal days: close <= BB_lower)",
+                 fontsize=13, fontweight="bold")
     fig.tight_layout()
     _save(fig, "chart3_lstm_prediction.png")
 
@@ -165,7 +180,7 @@ def plot_metrics_comparison(lstm_acc, arima_acc, stack_acc,
                              lstm_mape, arima_mape, ticker):
     fig, axes = plt.subplots(1, 3, figsize=(14, 5))
     fig.suptitle(
-        f"[{ticker}] Model Metrics Comparison\n"
+        f"[{ticker}] Model Metrics Comparison  (BB Signal: mean reversion)\n"
         f"Higher Accuracy | Lower RMSE & MAPE is better",
         fontsize=12, fontweight="bold"
     )
@@ -210,34 +225,43 @@ def plot_stacking_result(df, test_start_idx, y_te,
                          stack_pred, stack_prob,
                          lstm_acc, arima_acc, stack_acc,
                          meta_model, ticker):
-    test_dates = df.index[test_start_idx: test_start_idx + len(y_te)]
+    # Stacking is computed on aligned signal days only (may be fewer than y_te)
+    # Use the minimum length to avoid shape mismatch
+    n_common   = min(len(stack_pred), len(y_te), len(lstm_preds))
+    test_dates = df.index[test_start_idx: test_start_idx + len(y_te)][:n_common]
+
+    y_te_plot      = y_te[:n_common]
+    lstm_plot      = lstm_preds[:n_common]
+    arima_plot     = arima_preds_dir[:n_common]
+    stack_pred_plt = stack_pred[:n_common]
+    stack_prob_plt = stack_prob[:n_common]
+
     fig, axes  = plt.subplots(3, 1, figsize=(14, 12))
     fig.suptitle(
-        f"[{ticker}] Stacking Ensemble  Accuracy={stack_acc:.2%}",
+        f"[{ticker}] Stacking Ensemble  Accuracy={stack_acc:.2%}  (BB Signal days, n={n_common})",
         fontsize=13, fontweight="bold"
     )
 
     # Model prediction comparison
     ax = axes[0]
-    ax.plot(test_dates, y_te,       "#2196F3", lw=2,   label="Actual",                alpha=0.8)
-    ax.plot(test_dates, lstm_preds, "#FF5722", lw=1,   label=f"LSTM  ({lstm_acc:.2%})",  ls="--", alpha=0.7)
-    ax.plot(test_dates, arima_preds_dir[:len(y_te)],
-                                    "#009688", lw=1,   label=f"ARIMA ({arima_acc:.2%})", ls=":",  alpha=0.7)
-    ax.plot(test_dates, stack_pred, "#9C27B0", lw=1.5, label=f"Stack ({stack_acc:.2%})")
+    ax.plot(test_dates, y_te_plot,  "#2196F3", lw=2,   label="Actual",                alpha=0.8)
+    ax.plot(test_dates, lstm_plot,  "#FF5722", lw=1,   label=f"LSTM  ({lstm_acc:.2%})",  ls="--", alpha=0.7)
+    ax.plot(test_dates, arima_plot, "#009688", lw=1,   label=f"ARIMA ({arima_acc:.2%})", ls=":",  alpha=0.7)
+    ax.plot(test_dates, stack_pred_plt, "#9C27B0", lw=1.5, label=f"Stack ({stack_acc:.2%})")
     ax.set_ylim(-0.1, 1.1)
-    ax.set_title("Prediction Comparison: LSTM vs ARIMA vs Stacking")
+    ax.set_title("Prediction Comparison: LSTM vs ARIMA vs Stacking  (BB signal days only)")
     ax.legend(fontsize=10); ax.grid(alpha=0.3)
 
     # Stacking probability
     ax = axes[1]
-    ax.plot(test_dates, stack_prob, "#9C27B0", lw=1.2, label="Stacking Up Probability")
-    ax.fill_between(test_dates, stack_prob, 0.5,
-                    where=(stack_prob >= 0.5), alpha=0.2, color="#4CAF50", label="Predicted Up")
-    ax.fill_between(test_dates, stack_prob, 0.5,
-                    where=(stack_prob <  0.5), alpha=0.2, color="#F44336", label="Predicted Down")
+    ax.plot(test_dates, stack_prob_plt, "#9C27B0", lw=1.2, label="Stacking Up Probability")
+    ax.fill_between(test_dates, stack_prob_plt, 0.5,
+                    where=(stack_prob_plt >= 0.5), alpha=0.2, color="#4CAF50", label="Predicted Up")
+    ax.fill_between(test_dates, stack_prob_plt, 0.5,
+                    where=(stack_prob_plt <  0.5), alpha=0.2, color="#F44336", label="Predicted Down")
     ax.axhline(0.5, color="gray", lw=1, ls=":")
     ax.set_ylim(0, 1)
-    ax.set_title("Stacking Up Probability")
+    ax.set_title("Stacking Up Probability  (1=reversion UP expected, 0=DOWN)")
     ax.legend(fontsize=9); ax.grid(alpha=0.3)
 
     # Meta Model weights

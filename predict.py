@@ -1,14 +1,14 @@
 """
-predict.py - Next-day prediction with Strategy 4 gate logic
+predict.py - Next-day prediction with Bollinger Band primary signal
 
-Strategy 4 Gate Logic:
-  Step 1: Strategy 4 checks if today is worth entering
-          Buy  gate: EMA bullish AND close above BB upper
-          Sell gate: EMA bearish OR  close below BB lower
-  Step 2: Only if buy gate is open, LSTM makes final decision
-          LSTM says up   -> BUY
-          LSTM says down -> WAIT (signal exists but LSTM disagrees)
-  Step 3: If sell gate is open -> SELL / STAY OUT
+BB Signal Gate Logic (mean reversion):
+  Step 1: BB checks if today has a trading signal
+          Buy  gate : close <= BB_lower  (price touches lower band → oversold)
+          Sell gate : close >= BB_upper  (price touches upper band → overbought)
+  Step 2: If buy gate is open, LSTM/Stacking makes final profitability decision
+          Stacking says UP   -> BUY   (reversion likely → enter)
+          Stacking says DOWN -> WAIT  (reversion may fail → skip)
+  Step 3: If sell gate is open → SELL / STAY OUT (overbought, mean reversion down)
 
 Usage:
   python predict.py               <- use ticker from training
@@ -38,27 +38,32 @@ def load_config() -> dict:
         return json.load(f)
 
 
-def strategy4_gate(signal_buy: int,
+def bb_signal_gate(signal_buy: int,
                    signal_sell: int,
                    lstm_pred: int,
                    lstm_prob: float,
                    arima_pred: int,
                    stack_pred: int,
-                   stack_prob: float) -> dict:
+                   stack_prob: float,
+                   bb_squeeze: int) -> dict:
     """
-    Apply Strategy 4 gate logic to model predictions.
+    Apply Bollinger Band primary signal gate logic to model predictions.
 
-    Gate rules:
+    Gate rules (mean reversion strategy):
       SELL gate (highest priority):
-        - EMA bearish OR close below BB lower
-        - Regardless of model predictions -> do not enter
+        - close >= BB_upper  → overbought, do not enter long, exit if holding
 
       BUY gate:
-        - EMA bullish AND close above BB upper
-        - Only then ask LSTM/Stacking for final decision
+        - close <= BB_lower  → oversold, mean reversion expected
+        - Ask LSTM/Stacking: will the reversion succeed?
+          Stacking UP   → BUY  (reversion confirmed)
+          Stacking DOWN → WAIT (reversion may fail)
+
+      BB SQUEEZE (supplementary):
+        - BB_width contracted → potential breakout imminent
 
       NO signal:
-        - Hold current position or stay out
+        - Price between bands → market in normal range, observe
 
     Returns dict with:
       action      : "BUY" / "SELL" / "WAIT" / "HOLD"
@@ -70,25 +75,28 @@ def strategy4_gate(signal_buy: int,
     if signal_sell == 1:
         return {
             "action"    : "SELL / STAY OUT",
-            "reason"    : "Strategy 4 sell signal triggered\n"
-                          "  (EMA bearish OR price below BB lower)\n"
-                          "  -> Do not enter, exit if holding",
-            "confidence": "Rule-based (Strategy 4)",
+            "reason"    : "BB sell signal triggered\n"
+                          "  (close >= BB upper band → overbought)\n"
+                          "  Mean reversion DOWN expected\n"
+                          "  -> Exit long / Do not enter",
+            "confidence": "Rule-based (BB upper band touch)",
         }
 
     # ── BUY gate ──────────────────────────────────────────
     if signal_buy == 1:
-        # Strategy 4 says conditions are right, ask LSTM for final call
+        squeeze_note = "  [BB Squeeze detected: breakout may amplify move]\n" if bb_squeeze else ""
+        # BB oversold confirmed, ask model for profitability prediction
         if stack_pred == 1:
             if stack_prob >= 0.65:
-                conf = "High   (Strategy 4 + Stacking agree, prob>65%)"
+                conf = "High   (BB oversold + Model confirms UP, prob>65%)"
             else:
-                conf = "Medium (Strategy 4 triggered, Stacking mildly agrees)"
+                conf = "Medium (BB oversold triggered, Model mildly agrees)"
             return {
                 "action"    : "BUY",
-                "reason"    : f"Strategy 4 buy signal triggered\n"
-                              f"  (EMA bullish AND price above BB upper)\n"
-                              f"  Stacking confirms: UP (prob={stack_prob:.2%})\n"
+                "reason"    : f"BB buy signal triggered\n"
+                              f"  (close <= BB lower band → oversold)\n"
+                              f"{squeeze_note}"
+                              f"  Model predicts reversion UP (prob={stack_prob:.2%})\n"
                               f"  LSTM={'+' if lstm_pred==1 else '-'}  "
                               f"ARIMA={'+' if arima_pred==1 else '-'}",
                 "confidence": conf,
@@ -96,28 +104,44 @@ def strategy4_gate(signal_buy: int,
         else:
             return {
                 "action"    : "WAIT",
-                "reason"    : f"Strategy 4 buy signal triggered\n"
-                              f"  (EMA bullish AND price above BB upper)\n"
-                              f"  BUT Stacking disagrees: DOWN (prob={stack_prob:.2%})\n"
-                              f"  -> Strategy 4 says enter, models say no\n"
-                              f"  -> Safer to wait",
-                "confidence": "Low (conflicting signals)",
+                "reason"    : f"BB buy signal triggered\n"
+                              f"  (close <= BB lower band → oversold)\n"
+                              f"{squeeze_note}"
+                              f"  BUT Model predicts DOWN (prob={stack_prob:.2%})\n"
+                              f"  -> BB says oversold, model says reversion may fail\n"
+                              f"  -> Safer to wait for confirmation",
+                "confidence": "Low (BB signal vs model conflicting)",
             }
 
+    # ── BB Squeeze only (no band touch) ───────────────────
+    if bb_squeeze == 1:
+        if stack_pred == 1 and stack_prob >= 0.60:
+            ref = f"Squeeze + Model leans UP (prob={stack_prob:.2%})"
+        elif stack_pred == 0 and stack_prob <= 0.40:
+            ref = f"Squeeze + Model leans DOWN (prob={stack_prob:.2%})"
+        else:
+            ref = f"Squeeze detected but model inconclusive (prob={stack_prob:.2%})"
+
+        return {
+            "action"    : "WATCH",
+            "reason"    : f"BB Squeeze detected (volatility contracting)\n"
+                          f"  -> No band touch yet, but breakout may be imminent\n"
+                          f"  {ref}",
+            "confidence": "Low (squeeze only, no signal)",
+        }
+
     # ── No signal ─────────────────────────────────────────
-    # Neither buy nor sell gate triggered
-    # Use model predictions as reference only
     if stack_pred == 1 and stack_prob >= 0.60:
-        ref = f"Models lean UP (prob={stack_prob:.2%}) but no Strategy 4 signal"
+        ref = f"Model leans UP (prob={stack_prob:.2%}) but no BB signal"
     elif stack_pred == 0 and stack_prob <= 0.40:
-        ref = f"Models lean DOWN (prob={stack_prob:.2%}) but no Strategy 4 signal"
+        ref = f"Model leans DOWN (prob={stack_prob:.2%}) but no BB signal"
     else:
-        ref = f"Models inconclusive (prob={stack_prob:.2%})"
+        ref = f"Model inconclusive (prob={stack_prob:.2%})"
 
     return {
         "action"    : "HOLD / OBSERVE",
-        "reason"    : f"No Strategy 4 signal today\n"
-                      f"  (price within Bollinger Band, trend unclear)\n"
+        "reason"    : f"No BB signal today\n"
+                      f"  (price inside Bollinger Band, normal range)\n"
                       f"  {ref}",
         "confidence": "N/A (no signal)",
     }
@@ -127,7 +151,7 @@ def main():
     ticker_arg = sys.argv[1] if len(sys.argv) > 1 else None
 
     print(f"\n{'='*55}")
-    print("  Strategy 4 Prediction  (predict.py)")
+    print("  BB Signal Prediction  (predict.py)")
     print(f"{'='*55}")
 
     # Load config and models
@@ -160,16 +184,18 @@ def main():
     close_today = float(close.iloc[-1])
 
     # Indicator values
-    ema20     = float(df["EMA_20"].iloc[-1])
-    ema60     = float(df["EMA_60"].iloc[-1])
-    bb_upper  = float(df["BB_upper"].iloc[-1])
-    bb_lower  = float(df["BB_lower"].iloc[-1])
-    bb_mid    = float(df["BB_mid"].iloc[-1])
-    bb_pct    = float(df["BB_pct"].iloc[-1])
-    vol_ratio = float(df["VOL_ratio"].iloc[-1])
-    trend     = int(df["EMA_trend"].iloc[-1])
-    s_buy     = int(df["Signal_buy"].iloc[-1])
-    s_sell    = int(df["Signal_sell"].iloc[-1])
+    ema20      = float(df["EMA_20"].iloc[-1])
+    ema60      = float(df["EMA_60"].iloc[-1])
+    bb_upper   = float(df["BB_upper"].iloc[-1])
+    bb_lower   = float(df["BB_lower"].iloc[-1])
+    bb_mid     = float(df["BB_mid"].iloc[-1])
+    bb_pct     = float(df["BB_pct"].iloc[-1])
+    bb_width   = float(df["BB_width"].iloc[-1])
+    bb_squeeze = int(df["BB_squeeze"].iloc[-1])
+    vol_ratio  = float(df["VOL_ratio"].iloc[-1])
+    trend      = int(df["EMA_trend"].iloc[-1])
+    s_buy      = int(df["Signal_buy"].iloc[-1])
+    s_sell     = int(df["Signal_sell"].iloc[-1])
 
     # Model predictions
     lstm_pred,  lstm_prob  = lstm_model.predict(
@@ -182,12 +208,13 @@ def main():
         meta_model_loaded, lstm_prob, arima_pred
     )
 
-    # Apply Strategy 4 gate logic
-    decision = strategy4_gate(
+    # Apply BB signal gate logic
+    decision = bb_signal_gate(
         s_buy, s_sell,
         lstm_pred, lstm_prob,
         arima_pred,
         stack_pred, stack_prob,
+        bb_squeeze,
     )
 
     # ── Output ────────────────────────────────────────────
@@ -196,40 +223,42 @@ def main():
 
     print(f"""
 {'='*55}
-  Strategy 4 Indicators  [{today.date()}]
+  BB Signal Prediction  [{today.date()}]
 {'='*55}
   Ticker        : {ticker}
   Close         : {close_today:.2f} TWD
 
-  -- EMA -----------------------------------------------
+  -- EMA (context for model, not gate) ----------------
   EMA 20        : {ema20:.2f}
   EMA 60        : {ema60:.2f}
   Trend         : {"Bullish (EMA20 > EMA60)" if trend==1 else "Bearish (EMA20 < EMA60)"}
 
-  -- Bollinger Band ------------------------------------
-  Upper         : {bb_upper:.2f}
+  -- Bollinger Band [PRIMARY SIGNAL] ------------------
+  Upper (2σ)    : {bb_upper:.2f}
   Mid  (MA20)   : {bb_mid:.2f}
-  Lower         : {bb_lower:.2f}
-  %B Position   : {bb_pct:.2%}
-  Above Upper   : {"Yes -> Buy condition met"  if close_today > bb_upper else "No"}
-  Below Lower   : {"Yes -> Sell condition met" if close_today < bb_lower else "No"}
+  Lower (2σ)    : {bb_lower:.2f}
+  BB Width      : {bb_width:.4f}  {"[SQUEEZE]" if bb_squeeze else ""}
+  %B Position   : {bb_pct:.2%}  {'(oversold zone)'  if bb_pct <= 0.0 else '(overbought zone)' if bb_pct >= 1.0 else '(normal range)'}
+  Touch Lower   : {"YES ★ BUY SIGNAL (close <= lower, oversold)"  if s_buy==1  else "No"}
+  Touch Upper   : {"YES ★ SELL SIGNAL (close >= upper, overbought)" if s_sell==1 else "No"}
 
   -- Volume --------------------------------------------
   Vol Ratio     : {vol_ratio:.2f}x  {"Heavy" if vol_ratio>1.5 else "Normal" if vol_ratio>0.7 else "Light"}
 
-  -- Strategy 4 Gate -----------------------------------
-  Buy  Gate     : {"OPEN  (EMA bullish + above BB upper)" if s_buy==1  else "CLOSED"}
-  Sell Gate     : {"OPEN  (EMA bearish or below BB lower)" if s_sell==1 else "CLOSED"}
+  -- BB Gate (mean reversion) --------------------------
+  Buy  Gate     : {"OPEN  ★ (close <= BB lower → oversold)" if s_buy==1  else "CLOSED (price above lower band)"}
+  Sell Gate     : {"OPEN  ★ (close >= BB upper → overbought)" if s_sell==1 else "CLOSED (price below upper band)"}
+  BB Squeeze    : {"YES  (volatility compressed, breakout may follow)" if bb_squeeze else "No"}
 
 {'='*55}
-  Model Predictions (reference only)
+  Model Predictions  [will BB trade be profitable?]
 {'='*55}
   LSTM          : {UP if lstm_pred==1 else DOWN}  (prob={lstm_prob:.2%})
   ARIMA         : {UP if arima_pred==1 else DOWN}  (forecast={arima_fore:.2f})
   Stacking      : {UP if stack_pred==1 else DOWN}  (prob={stack_prob:.2%})
 
 {'='*55}
-  Final Decision (Strategy 4 + Stacking)
+  Final Decision (BB Signal + Model)
 {'='*55}
   Action        : {decision['action']}
   Reason        :
