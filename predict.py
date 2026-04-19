@@ -38,6 +38,11 @@ def load_config() -> dict:
         return json.load(f)
 
 
+def _is_multi_ticker(meta: dict) -> bool:
+    """True if model was trained in multi-ticker mode."""
+    return meta.get("train_mode", "") == "multi_ticker_bb_weekly"
+
+
 def bb_signal_gate(signal_buy: int,
                    signal_sell: int,
                    lstm_pred: int,
@@ -154,26 +159,63 @@ def main():
     print("  BB Signal Prediction  (predict.py)")
     print(f"{'='*55}")
 
-    # Load config and models
-    meta              = load_config()
-    model, scaler     = lstm_model.load(MODEL_DIR)
-    arima_meta        = arima_model.load(MODEL_DIR)
+    # Load config
+    meta     = load_config()
+    is_multi = _is_multi_ticker(meta)
+    interval = meta.get("interval", "1d")
+
+    print(f"  Train mode : {meta.get('train_mode', 'unknown')}")
+    print(f"  Interval   : {interval}")
+    print(f"  Trained    : {meta['train_start']} ~ {meta['train_end']}")
+    print(f"  Saved at   : {meta['saved_at']}")
+    print(f"  Threshold  : {meta['best_threshold']:.2f}")
+
+    # Load models
+    model, _ = lstm_model.load(MODEL_DIR)      # model only; scaler loaded per-ticker below
     meta_model_loaded = stacking.load(MODEL_DIR)
 
-    print(f"  Ticker    : {meta['ticker']}")
-    print(f"  Trained   : {meta['train_start']} ~ {meta['train_end']}")
-    print(f"  Saved at  : {meta['saved_at']}")
-    print(f"  Threshold : {meta['best_threshold']:.2f}")
-
-    ticker       = ticker_arg if ticker_arg else meta["ticker"]
     feature_cols = meta["feature_cols"]
     seq_len      = meta["seq_len"]
     threshold    = meta["best_threshold"]
 
+    # Determine ticker
+    if is_multi:
+        trained_tickers = meta.get("tickers", [])
+        if ticker_arg:
+            ticker = ticker_arg
+        elif trained_tickers:
+            ticker = trained_tickers[0]
+        else:
+            ticker = "2330.TW"
+        print(f"  Trained tickers: {trained_tickers}")
+        if ticker not in trained_tickers:
+            print(f"  WARNING: {ticker} was not in training set. Using first ticker's scaler.")
+    else:
+        ticker = ticker_arg if ticker_arg else meta.get("ticker", "2330.TW")
+
     print(f"\n  Target: {ticker}")
 
-    # Download latest data
-    raw = yf.download(ticker, period="180d", progress=False)
+    # Load per-ticker scaler
+    if is_multi:
+        scalers_dict = lstm_model.load_scalers(MODEL_DIR)
+        scaler_key   = ticker if ticker in scalers_dict else list(scalers_dict.keys())[0]
+        scaler       = scalers_dict[scaler_key]
+        print(f"  Scaler loaded for: {scaler_key}")
+    else:
+        _, scaler = lstm_model.load(MODEL_DIR)
+
+    # Load per-ticker ARIMA
+    if is_multi:
+        arima_dict = arima_model.load_multi(MODEL_DIR)
+        arima_key  = ticker if ticker in arima_dict else list(arima_dict.keys())[0]
+        arima_meta = arima_dict[arima_key]
+        print(f"  ARIMA loaded for : {arima_key}")
+    else:
+        arima_meta = arima_model.load(MODEL_DIR)
+
+    # Download latest data (use same interval as training)
+    period = "500d" if interval == "1wk" else "180d"
+    raw    = yf.download(ticker, period=period, interval=interval, progress=False)
     raw.dropna(inplace=True)
     if hasattr(raw.columns, 'levels'):
         raw.columns = raw.columns.get_level_values(0)
@@ -197,8 +239,8 @@ def main():
     s_buy      = int(df["Signal_buy"].iloc[-1])
     s_sell     = int(df["Signal_sell"].iloc[-1])
 
-    # Model predictions
-    lstm_pred,  lstm_prob  = lstm_model.predict(
+    # Model predictions (use per-ticker scaler)
+    lstm_pred,  lstm_prob  = lstm_model.predict_with_scaler(
         model, scaler, df, feature_cols, seq_len, threshold
     )
     arima_pred, arima_fore = arima_model.predict_tomorrow(

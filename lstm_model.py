@@ -205,6 +205,7 @@ def predict(model, scaler, df,
 
 
 def save(model, scaler, model_dir: str = "models"):
+    """Save single-ticker model + scaler (legacy, kept for compatibility)."""
     os.makedirs(model_dir, exist_ok=True)
     model.save(os.path.join(model_dir, "lstm_model.h5"))
     with open(os.path.join(model_dir, "scaler.pkl"), "wb") as f:
@@ -213,8 +214,60 @@ def save(model, scaler, model_dir: str = "models"):
     print(f"  Scaler     -> {model_dir}/scaler.pkl")
 
 
+def save_multi(model, scalers_dict: dict, model_dir: str = "models"):
+    """
+    Save multi-ticker model + per-ticker scaler dict.
+
+    Args:
+        model        : trained Keras model (shared across tickers)
+        scalers_dict : {ticker: MinMaxScaler} per-ticker scaler
+        model_dir    : output directory
+    """
+    os.makedirs(model_dir, exist_ok=True)
+    model.save(os.path.join(model_dir, "lstm_model.h5"))
+    with open(os.path.join(model_dir, "scalers.pkl"), "wb") as f:
+        pickle.dump(scalers_dict, f)
+    print(f"  LSTM model  -> {model_dir}/lstm_model.h5")
+    print(f"  Scalers dict-> {model_dir}/scalers.pkl  ({len(scalers_dict)} tickers)")
+
+
 def load(model_dir: str = "models"):
+    """Load model. Returns (model, scaler) — scaler may be None for multi-ticker."""
     model = load_model(os.path.join(model_dir, "lstm_model.h5"))
-    with open(os.path.join(model_dir, "scaler.pkl"), "rb") as f:
-        scaler = pickle.load(f)
+    scaler_path = os.path.join(model_dir, "scaler.pkl")
+    if os.path.exists(scaler_path):
+        with open(scaler_path, "rb") as f:
+            scaler = pickle.load(f)
+    else:
+        scaler = None
     return model, scaler
+
+
+def load_scalers(model_dir: str = "models") -> dict:
+    """Load per-ticker scaler dict saved by save_multi()."""
+    path = os.path.join(model_dir, "scalers.pkl")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Missing {path} — run train.py with multi-ticker mode first.")
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def predict_with_scaler(model, scaler, df,
+                        feature_cols: list,
+                        seq_len: int,
+                        threshold: float):
+    """
+    Predict using an explicitly provided scaler (for multi-ticker mode).
+    Identical logic to predict(), but scaler is passed in rather than
+    loaded from disk.
+    """
+    X_raw    = df[feature_cols].values
+    X_scaled = scaler.transform(X_raw)
+
+    if len(X_scaled) < seq_len:
+        raise ValueError(f"Need at least {seq_len} rows, got {len(X_scaled)}")
+
+    X_input = X_scaled[-seq_len:].reshape(1, seq_len, len(feature_cols))
+    prob    = float(model.predict(X_input, verbose=0)[0][0])
+    pred    = 1 if prob >= threshold else 0
+    return pred, prob

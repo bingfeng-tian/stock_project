@@ -33,22 +33,32 @@ FEATURE_COLS = [
 
 def download_data(ticker: str,
                   start: str,
-                  end: str = None) -> pd.DataFrame:
+                  end: str = None,
+                  interval: str = '1d') -> pd.DataFrame:
     """
     Download OHLCV data from yfinance.
+
+    Args:
+        ticker   : e.g. "2330.TW"
+        start    : start date string "YYYY-MM-DD"
+        end      : end date string (None = today)
+        interval : '1d' for daily, '1wk' for weekly, '1mo' for monthly
     """
-    end_str = end if end else datetime.today().strftime("%Y-%m-%d")
+    end_str  = end if end else datetime.today().strftime("%Y-%m-%d")
+    bar_name = {"1d": "days", "1wk": "weeks", "1mo": "months"}.get(interval, interval)
+
     print(f"\n{'='*55}")
-    print(f"  [DataLoader] {ticker}  {start} ~ {end_str}")
+    print(f"  [DataLoader] {ticker}  {start} ~ {end_str}  [{interval}]")
     print(f"{'='*55}")
 
-    df = yf.download(ticker, start=start, end=end_str, progress=False)
+    df = yf.download(ticker, start=start, end=end_str,
+                     interval=interval, progress=False)
     df.dropna(inplace=True)
 
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    print(f"  Downloaded {len(df)} trading days")
+    print(f"  Downloaded {len(df)} {bar_name}")
     print(f"  Range: {df.index[0].date()} ~ {df.index[-1].date()}")
     return df
 

@@ -148,6 +148,97 @@ def generate_oof(full_df,
 
 
 # ════════════════════════════════════════════════════════
+#  OOF from pre-built sequences (multi-ticker mode)
+# ════════════════════════════════════════════════════════
+def generate_oof_from_seqs(X_tr: np.ndarray,
+                           y_tr: np.ndarray,
+                           arima_tr_preds: np.ndarray,
+                           n_folds: int = 5,
+                           epochs: int = 100,
+                           batch_size: int = 16):
+    """
+    Generate Out-of-Fold predictions from pre-built sequence arrays.
+    Used in multi-ticker mode where sequences are already scaled and combined.
+
+    Args:
+        X_tr          : (N, seq_len, n_features) combined training sequences
+        y_tr          : (N,) labels
+        arima_tr_preds: (N,) ARIMA directional predictions on training signal days
+        n_folds       : number of CV folds
+        epochs        : LSTM training epochs per fold
+        batch_size    : batch size
+
+    Returns:
+        oof_lstm_prob  : OOF LSTM probabilities
+        oof_arima_pred : aligned ARIMA predictions
+        oof_labels     : true labels
+    """
+    print(f"\n{'='*55}")
+    print(f"  [Stacking] OOF from sequences ({n_folds}-Fold, n={len(X_tr)})")
+    print(f"{'='*55}")
+
+    n = len(X_tr)
+    if n < n_folds * 2:
+        print(f"  WARNING: Only {n} samples, skipping OOF")
+        return np.array([]), np.array([]), np.array([])
+
+    seq_len    = X_tr.shape[1]
+    n_features = X_tr.shape[2]
+
+    oof_lstm_prob  = np.zeros(n)
+    oof_mask       = np.zeros(n, dtype=bool)
+
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=42)
+
+    for fold, (tr_idx, val_idx) in enumerate(kf.split(np.arange(n))):
+        print(f"\n  -- Fold {fold+1}/{n_folds} --  train={len(tr_idx)}  val={len(val_idx)}")
+
+        X_tr_fold = X_tr[tr_idx];  y_tr_fold = y_tr[tr_idx]
+        X_va_fold = X_tr[val_idx]; y_va_fold = y_tr[val_idx]
+
+        if len(X_tr_fold) < 5 or len(X_va_fold) == 0:
+            print(f"  Fold {fold+1}: not enough data, skipping")
+            continue
+
+        n_pos = y_tr_fold.sum()
+        n_neg = len(y_tr_fold) - n_pos
+        cw    = {0: 1.0, 1: float(n_neg) / float(n_pos) if n_pos > 0 else 1.0}
+
+        model_fold = build_model(seq_len, n_features)
+        model_fold.fit(
+            X_tr_fold, y_tr_fold,
+            validation_split=0.1,
+            epochs=epochs,
+            batch_size=batch_size,
+            class_weight=cw,
+            callbacks=[
+                EarlyStopping(monitor="val_loss", patience=15,
+                              restore_best_weights=True, verbose=0),
+                ReduceLROnPlateau(monitor="val_loss", factor=0.5,
+                                  patience=7, min_lr=1e-6, verbose=0),
+            ],
+            verbose=0,
+        )
+
+        prob_fold = model_fold.predict(X_va_fold, verbose=0).flatten()
+        fold_acc  = accuracy_score(y_va_fold, (prob_fold >= 0.5).astype(int))
+        print(f"  Fold {fold+1} accuracy: {fold_acc:.2%}")
+
+        for j, orig_idx in enumerate(val_idx):
+            if j < len(prob_fold):
+                oof_lstm_prob[orig_idx] = prob_fold[j]
+                oof_mask[orig_idx]      = True
+
+        tf.keras.backend.clear_session()
+
+    valid = oof_mask
+    print(f"\n  OOF valid: {valid.sum()} / {n}")
+
+    arima_aligned = arima_tr_preds[valid] if len(arima_tr_preds) == n else np.zeros(valid.sum())
+    return oof_lstm_prob[valid], arima_aligned, y_tr[valid]
+
+
+# ════════════════════════════════════════════════════════
 #  Train Meta Model
 # ════════════════════════════════════════════════════════
 def train_meta(oof_lstm_prob: np.ndarray,
@@ -192,9 +283,14 @@ def predict_test(meta_model,
     stack_acc  = accuracy_score(y_test, stack_pred)
 
     print(f"  Stacking Accuracy: {stack_acc:.2%}")
-    print(classification_report(y_test, stack_pred,
-                                target_names=["Unprofitable(0)", "Profitable(1)"],
-                                digits=4))
+    try:
+        # labels=[0,1] ensures report shows both classes even if only one appears
+        print(classification_report(y_test, stack_pred,
+                                    labels=[0, 1],
+                                    target_names=["Unprofitable(0)", "Profitable(1)"],
+                                    digits=4, zero_division=0))
+    except Exception as e:
+        print(f"  (classification_report skipped: {e})")
     return stack_pred, stack_prob, stack_acc
 
 

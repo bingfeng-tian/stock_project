@@ -125,7 +125,7 @@ def predict_tomorrow(arima_meta: dict,
 #  Save / Load
 # ════════════════════════════════════════════════════════
 def save(order: tuple, close_series, model_dir: str = "models"):
-    """Save ARIMA order and full close history for future prediction."""
+    """Save single-ticker ARIMA params (legacy)."""
     os.makedirs(model_dir, exist_ok=True)
     arima_meta = {
         "order"        : list(order),
@@ -137,7 +137,32 @@ def save(order: tuple, close_series, model_dir: str = "models"):
     print(f"  ARIMA params -> {path}")
 
 
+def save_multi(arima_dict: dict, model_dir: str = "models"):
+    """
+    Save per-ticker ARIMA params dict.
+
+    Args:
+        arima_dict : {ticker: {"order": [...], "history_tail": [...]}}
+        model_dir  : output directory
+    """
+    os.makedirs(model_dir, exist_ok=True)
+    path = os.path.join(model_dir, "arima_multi.pkl")
+    with open(path, "wb") as f:
+        pickle.dump(arima_dict, f)
+    print(f"  ARIMA multi  -> {path}  ({len(arima_dict)} tickers)")
+
+
 def load(model_dir: str = "models") -> dict:
+    """Load single-ticker ARIMA params."""
     path = os.path.join(model_dir, "arima_params.pkl")
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+
+def load_multi(model_dir: str = "models") -> dict:
+    """Load per-ticker ARIMA params dict saved by save_multi()."""
+    path = os.path.join(model_dir, "arima_multi.pkl")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Missing {path} — run train.py with multi-ticker mode first.")
     with open(path, "rb") as f:
         return pickle.load(f)
