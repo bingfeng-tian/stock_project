@@ -2,12 +2,27 @@
   "tickers": [
     "2330.TW",
     "2317.TW",
+    "2454.TW",
+    "3711.TW",
     "2383.TW",
+    "2382.TW",
+    "2303.TW",
+    "3017.TW",
     "3037.TW",
-    "2357.TW"
+    "2357.TW",
+    "3231.TW",
+    "2327.TW",
+    "6669.TW",
+    "3653.TW",
+    "3665.TW",
+    "2368.TW",
+    "2449.TW",
+    "2344.TW",
+    "2301.TW",
+    "2313.TW"
   ],
-  "train_start": "2018-01-01",
-  "train_end": "2026-04-20",
+  "train_start": "2010-01-01",
+  "train_end": "2025-12-31",
   "interval": "1wk",
   "seq_len": 20,
   "hold_days": 4,
@@ -32,13 +47,13 @@
     "Signal_buy",
     "Signal_sell"
   ],
-  "best_threshold": 0.5100000000000002,
+  "best_threshold": 0.3,
   "arima_order": [
     2,
     1,
     2
   ],
-  "saved_at": "2026-04-20 10:57:11",
+  "saved_at": "2026-04-20 12:24:21",
   "train_mode": "multi_ticker_bb_weekly",
   "signal_logic": "buy=close<=BB_lower, sell=close>=BB_upper"
 }

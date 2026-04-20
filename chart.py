@@ -285,6 +285,44 @@ def plot_arima_acc_per_ticker(ticker_stats: list):
 
 
 # ════════════════════════════════════════════════════════
+#  chart08 — LSTM Training Curve  (accuracy + loss, twin axis)
+# ════════════════════════════════════════════════════════
+def plot_lstm_training(history_log, ticker: str = "Multi-Ticker"):
+    hist = history_log.history
+    epochs = range(1, len(hist["loss"]) + 1)
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    # Accuracy on left axis
+    ax.plot(epochs, hist["accuracy"],     "#2196F3", lw=2,   label="Train Accuracy")
+    ax.plot(epochs, hist["val_accuracy"], "#FF5722", lw=2,   label="Val Accuracy", ls="--")
+    ax.set_ylabel("Accuracy"); ax.set_xlabel("Epoch")
+    ax.set_ylim(0, 1.05)
+
+    # Loss on right axis
+    ax2 = ax.twinx()
+    ax2.plot(epochs, hist["loss"],     "#4CAF50", lw=1.5, alpha=0.7, label="Train Loss")
+    ax2.plot(epochs, hist["val_loss"], "#F44336", lw=1.5, alpha=0.7, label="Val Loss", ls="--")
+    ax2.set_ylabel("Loss", color="gray")
+
+    best_epoch = int(np.argmin(hist["val_loss"])) + 1
+    ax.axvline(best_epoch, color="gold", lw=1.5, ls=":",
+               label=f"Best epoch = {best_epoch}")
+
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, fontsize=9, loc="upper right")
+    ax.set_title(
+        f"[{ticker}]  LSTM Training Curve\n"
+        f"Best val_loss at epoch {best_epoch}  "
+        f"(val_acc = {hist['val_accuracy'][best_epoch-1]:.2%})"
+    )
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart08_lstm_training.png")
+
+
+# ════════════════════════════════════════════════════════
 #  Convenience: called from train.py
 # ════════════════════════════════════════════════════════
 def plot_arima_metrics_by_ticker(ticker_stats: list):

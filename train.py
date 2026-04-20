@@ -47,13 +47,23 @@ TICKERS = [
     "2303.TW",   # 聯電
     "3017.TW",   # 奇鋐
     "3037.TW",   # 欣興
-    "2357.TW",   # 華碩
+    "2357.TW",   # 華碩 10
+    "3231.TW",   # 緯創
+    "2327.TW",   # 國巨
+    "6669.TW",   # 緯穎
+    "3653.TW",   # 健策
+    "3665.TW",   # 貿聯 15
+    "2368.TW",   # 金像電
+    "2449.TW",   # 京元電子
+    "2344.TW",   # 華邦電
+    "2301.TW",   # 光寶科
+    "2313.TW",   # 華通 20
 ]
 
 INTERVAL    = "1wk"         # 週資料
-START_DATE  = "2018-01-01"
-END_DATE    = None
-TRAIN_RATIO = 0.8
+START_DATE  = "2010-01-01"
+END_DATE    = "2025-12-31"
+TRAIN_RATIO = 0.6
 SEQ_LEN     = 20            # 20週 ≈ 5個月的歷史上下文
 EPOCHS      = 100
 BATCH_SIZE  = 32            # 合併多標的後樣本多，batch可以大一點
@@ -454,6 +464,10 @@ def main():
         chart_mod.plot_threshold_sensitivity(
             y_te_all, stack_prob, "Multi-Ticker"
         )
+
+    # chart08 — LSTM Training Curve
+    if history_log is not None:
+        chart_mod.plot_lstm_training(history_log, "Multi-Ticker")
 
     # chart05–07 — Per-ticker ARIMA metrics
     chart_mod.plot_arima_metrics_by_ticker(ticker_stats)
