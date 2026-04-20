@@ -185,6 +185,15 @@ def main():
     ticker_stats = []
     valid_tickers = []
 
+    # For chart01 / chart04 / chart05: capture first valid ticker
+    first_ticker_df     = None
+    first_ticker_name   = None
+    first_ticker_split  = None
+    first_arima_actual  = None
+    first_arima_pred    = None
+    first_arima_dir     = None
+    first_arima_acc_val = None
+
     for ticker in TICKERS:
         print(f"\n{'─'*55}")
         print(f"  [{ticker}] Downloading & processing...")
@@ -233,11 +242,24 @@ def main():
                 all_X_te.append(X_te_seq); all_y_te.append(y_te_seq)
 
             # ── ARIMA rolling forecast ─────────────────────
-            arima_dir_te, _, _, arima_acc_te = arima_model.rolling_forecast(
-                close_s.iloc[:split_full],
-                close_s.iloc[split_full:],
-                ARIMA_ORDER,
-            )
+            arima_dir_te, arima_pred_val, arima_actual_val, arima_acc_te = \
+                arima_model.rolling_forecast(
+                    close_s.iloc[:split_full],
+                    close_s.iloc[split_full:],
+                    ARIMA_ORDER,
+                )
+            arima_rmse_tk = calc_rmse(arima_actual_val, arima_pred_val)
+            arima_mape_tk = calc_mape(arima_actual_val, arima_pred_val)
+
+            # Keep first valid ticker for per-ticker charts
+            if first_ticker_df is None:
+                first_ticker_df     = full_df
+                first_ticker_name   = ticker
+                first_ticker_split  = split_full
+                first_arima_actual  = list(arima_actual_val)
+                first_arima_pred    = list(arima_pred_val)
+                first_arima_dir     = arima_dir_te
+                first_arima_acc_val = arima_acc_te
 
             # ARIMA at TEST signal days
             te_offsets = [idx - split_full for idx in te_sig_idx
@@ -272,6 +294,8 @@ def main():
                 "sig_rate"    : len(signal_df) / len(full_df),
                 "profit_rate" : float(y_sig.mean()),
                 "arima_acc"   : arima_acc_te,
+                "arima_rmse"  : arima_rmse_tk,
+                "arima_mape"  : arima_mape_tk,
             }
             ticker_stats.append(stat)
             valid_tickers.append(ticker)
@@ -298,17 +322,22 @@ def main():
     if len(arima_tr_all) != len(X_tr_all):
         arima_tr_all = np.zeros(len(X_tr_all))
 
-    print(f"\n{'='*55}")
+    print(f"\n{'='*65}")
     print(f"  Combined Dataset Summary")
-    print(f"{'='*55}")
-    print(f"  {'Ticker':<12} {'Bars':>5} {'Signals':>8} {'Tr':>5} {'Te':>5} {'Profit':>8} {'ARIMA':>8}")
-    print(f"  {'─'*55}")
+    print(f"{'='*65}")
+    print(f"  {'Ticker':<12} {'Bars':>5} {'Sig':>5} {'Tr':>4} {'Te':>4} "
+          f"{'Profit':>7} {'Acc':>7} {'RMSE':>8} {'MAPE':>7}")
+    print(f"  {'─'*65}")
     for s in ticker_stats:
-        print(f"  {s['ticker']:<12} {s['bars']:>5} {s['signals']:>8} "
-              f"{s['tr_seqs']:>5} {s['te_seqs']:>5} "
-              f"{s['profit_rate']:>7.1%} {s['arima_acc']:>7.1%}")
-    print(f"  {'─'*55}")
-    print(f"  {'TOTAL':<12} {'':>5} {'':>8} {len(X_tr_all):>5} {len(X_te_all):>5}")
+        print(f"  {s['ticker']:<12} {s['bars']:>5} {s['signals']:>5} "
+              f"{s['tr_seqs']:>4} {s['te_seqs']:>4} "
+              f"{s['profit_rate']:>6.1%} {s['arima_acc']:>6.1%} "
+              f"{s['arima_rmse']:>8.2f} {s['arima_mape']:>6.2f}%")
+    print(f"  {'─'*65}")
+    avg_rmse = float(np.mean([s['arima_rmse'] for s in ticker_stats]))
+    avg_mape = float(np.mean([s['arima_mape'] for s in ticker_stats]))
+    print(f"  {'TOTAL/AVG':<12} {'':>5} {'':>5} {len(X_tr_all):>4} {len(X_te_all):>4} "
+          f"{'':>7} {'':>7} {avg_rmse:>8.2f} {avg_mape:>6.2f}%")
 
     # ── Train LSTM ───────────────────────────────────────
     model, best_thr, lstm_prob_te, history_log = _train_lstm_on_sequences(
@@ -374,22 +403,117 @@ def main():
 
     # ── Final Metrics ────────────────────────────────────
     print(f"""
-{'='*55}
+{'='*65}
   Final Metrics Summary  (Multi-Ticker Weekly BB)
-{'='*55}
-  Tickers     : {len(valid_tickers)}  {valid_tickers}
-  Interval    : {INTERVAL}  |  Hold={HOLD_DAYS} weeks
-  Total seqs  : train={len(X_tr_all)}  test={len(X_te_all)}
+{'='*65}
+  Tickers  : {len(valid_tickers)}  {valid_tickers}
+  Interval : {INTERVAL}  |  Hold={HOLD_DAYS} weeks
+  Seqs     : train={len(X_tr_all)}  test={len(X_te_all)}
 
-  +------------------+----------+----------+----------+
-  |   Metric         |   LSTM   |  ARIMA   | Stacking |
-  +------------------+----------+----------+----------+
-  |  Accuracy        | {lstm_acc:>6.2%}   | {arima_acc:>6.2%}   | {stack_acc:>6.2%}   |
-  +------------------+----------+----------+----------+
-  Accuracy = correctly predicted profitable BB signals
+  +--------------------+----------+----------+----------+
+  |   Metric           |   LSTM   |  ARIMA   | Stacking |
+  +--------------------+----------+----------+----------+
+  |  Accuracy          | {lstm_acc:>6.2%}   | {arima_acc:>6.2%}   | {stack_acc:>6.2%}   |
+  |  RMSE (avg/ticker) |    N/A   | {avg_rmse:>8.3f} |    N/A   |
+  |  MAPE (avg/ticker) |    N/A   | {avg_mape:>7.3f}% |    N/A   |
+  +--------------------+----------+----------+----------+
+  Accuracy = % of BB buy signals correctly predicted as profitable
+  RMSE/MAPE = ARIMA close price prediction error (per-ticker avg)
     """)
 
-    print(f"Training complete!")
+    # ── Generate charts ──────────────────────────────────
+    import chart as chart_mod
+    print(f"\n{'='*55}")
+    print(f"  [Chart] Generating output charts -> ./charts/")
+    print(f"{'='*55}")
+
+    # chart01 — Price + EMA + Bollinger Band + signals (first ticker)
+    if first_ticker_df is not None:
+        chart_mod.plot_price_bb_signals(
+            first_ticker_df,
+            first_ticker_split,
+            first_ticker_name,
+            START_DATE,
+            end_label,
+        )
+
+    # chart02 — LSTM training curve
+    if history_log is not None:
+        chart_mod.plot_lstm_training(history_log)
+
+    # chart03 — LSTM direction prediction on test set
+    if len(y_te_all) > 0 and len(lstm_preds_te) > 0:
+        te_indices = np.arange(len(y_te_all))
+        n03 = min(len(te_indices), len(lstm_preds_te), len(lstm_prob_te))
+        chart_mod.plot_lstm_direction(
+            te_indices[:n03],
+            y_te_all[:n03],
+            lstm_preds_te[:n03],
+            lstm_prob_te[:n03],
+            lstm_acc,
+            "Multi-Ticker",
+        )
+
+    # chart04 — ARIMA close price forecast vs actual (first ticker)
+    if first_arima_actual is not None and len(first_arima_actual) > 1:
+        chart_mod.plot_arima_price(
+            first_arima_actual,
+            first_arima_pred,
+            calc_rmse(first_arima_actual, first_arima_pred),
+            calc_mape(first_arima_actual, first_arima_pred),
+            first_arima_acc_val,
+            first_ticker_name,
+        )
+
+    # chart05 — ARIMA direction prediction vs actual (first ticker)
+    if first_arima_actual is not None and len(first_arima_actual) > 2:
+        chart_mod.plot_arima_direction(
+            np.array(first_arima_actual),
+            first_arima_dir,
+            first_arima_acc_val,
+            first_ticker_name,
+        )
+
+    # chart06 — Accuracy comparison: LSTM / ARIMA / Stacking
+    chart_mod.plot_accuracy_comparison(lstm_acc, arima_acc, stack_acc, "Multi-Ticker")
+
+    # chart07 — RMSE bar (average across tickers)
+    chart_mod.plot_rmse_comparison(avg_rmse, "Multi-Ticker Avg")
+
+    # chart08 — MAPE bar (average across tickers)
+    chart_mod.plot_mape_comparison(avg_mape, "Multi-Ticker Avg")
+
+    # chart09 — LSTM vs ARIMA vs Stacking prediction comparison
+    if (len(y_te_all) > 0 and len(lstm_preds_te) > 0
+            and len(arima_te_all) > 0 and len(stack_pred) > 0):
+        te_indices = np.arange(len(y_te_all))
+        n09 = min(len(te_indices), len(lstm_preds_te),
+                  len(arima_te_all), len(stack_pred), len(y_te_all))
+        chart_mod.plot_pred_comparison(
+            te_indices[:n09],
+            y_te_all[:n09],
+            lstm_preds_te[:n09],
+            arima_te_all[:n09],
+            stack_pred[:n09],
+            lstm_acc, arima_acc, stack_acc,
+            "Multi-Ticker",
+        )
+
+    # chart10 — Stacking up probability over time
+    if len(stack_prob) > 0 and len(y_te_all) > 0:
+        te_indices = np.arange(len(stack_prob))
+        chart_mod.plot_stacking_prob(
+            te_indices, stack_prob, stack_acc, "Multi-Ticker"
+        )
+
+    # chart11 — Meta Model weights
+    if meta_model is not None:
+        chart_mod.plot_meta_weights(meta_model, "Multi-Ticker")
+
+    # chart12–14 — Per-ticker ARIMA metrics
+    chart_mod.plot_arima_metrics_by_ticker(ticker_stats)
+
+    print(f"\nTraining complete!")
     print(f"  Run: python predict.py 2330.TW  (or any trained ticker)")
     print(f"  Interval: {INTERVAL}  |  Hold: {HOLD_DAYS} weeks\n")
 

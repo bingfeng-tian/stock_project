@@ -7,7 +7,7 @@
     "2357.TW"
   ],
   "train_start": "2018-01-01",
-  "train_end": "2026-04-19",
+  "train_end": "2026-04-20",
   "interval": "1wk",
   "seq_len": 20,
   "hold_days": 4,
@@ -38,7 +38,7 @@
     1,
     2
   ],
-  "saved_at": "2026-04-19 15:12:26",
+  "saved_at": "2026-04-20 10:48:24",
   "train_mode": "multi_ticker_bb_weekly",
   "signal_logic": "buy=close<=BB_lower, sell=close>=BB_upper"
 }

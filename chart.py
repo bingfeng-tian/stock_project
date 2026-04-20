@@ -1,16 +1,21 @@
 """
-chart.py
-Responsible for:
-  All chart generation and saving.
-  Reads model predictions, outputs PNG files to charts/ folder.
+chart.py — one function = one figure = one PNG file
 
-Charts produced:
-  chart1_price_indicators.png  - Price + EMA + Bollinger Band (with BB signals marked)
-  chart2_lstm_training.png     - LSTM training curve
-  chart3_lstm_prediction.png   - LSTM prediction vs actual (BB signal days)
-  chart4_arima_prediction.png  - ARIMA prediction vs actual
-  chart5_metrics_comparison.png- LSTM vs ARIMA vs Stacking bar chart
-  chart6_stacking_result.png   - Stacking detail + Meta Model weights
+Chart index:
+  chart01_price_bb_signals.png      Price + EMA + BB bands + buy/sell markers
+  chart02_lstm_training.png         LSTM training accuracy & loss curve
+  chart03_lstm_direction.png        LSTM predicted direction vs actual (signal days)
+  chart04_arima_price.png           ARIMA close price forecast vs actual
+  chart05_arima_direction.png       ARIMA predicted direction vs actual
+  chart06_accuracy.png              Accuracy bar: LSTM / ARIMA / Stacking
+  chart07_rmse.png                  RMSE bar: ARIMA per-ticker average
+  chart08_mape.png                  MAPE bar: ARIMA per-ticker average
+  chart09_pred_comparison.png       LSTM vs ARIMA vs Stacking prediction comparison
+  chart10_stacking_prob.png         Stacking up-probability over time
+  chart11_meta_weights.png          Meta Model (Logistic Regression) weights
+  chart12_arima_rmse_per_ticker.png ARIMA RMSE for each ticker
+  chart13_arima_mape_per_ticker.png ARIMA MAPE for each ticker
+  chart14_arima_acc_per_ticker.png  ARIMA direction accuracy for each ticker
 """
 
 import os
@@ -19,12 +24,12 @@ import matplotlib
 import matplotlib.pyplot as plt
 matplotlib.rcParams['font.family'] = 'DejaVu Sans'
 
-from sklearn.metrics import accuracy_score
-
-
 CHART_DIR = "charts"
 
 
+# ────────────────────────────────────────────────────────
+#  Internal helper
+# ────────────────────────────────────────────────────────
 def _save(fig, filename: str):
     os.makedirs(CHART_DIR, exist_ok=True)
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -34,17 +39,33 @@ def _save(fig, filename: str):
     plt.close(fig)
 
 
+def _bar_with_labels(ax, labels, values, colors, direction="higher"):
+    bars = ax.bar(labels, values, color=colors, alpha=0.85, width=0.55)
+    top  = max(v for v in values if v is not None)
+    for bar, val in zip(bars, values):
+        if val is None:
+            continue
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + top * 0.025,
+                f"{val:.2f}", ha="center", va="bottom",
+                fontsize=11, fontweight="bold")
+    best = (np.argmax(values) if direction == "higher" else np.argmin(values))
+    bars[best].set_edgecolor("gold")
+    bars[best].set_linewidth(3)
+    return bars
+
+
 # ════════════════════════════════════════════════════════
-#  Chart 1: Price + EMA + Bollinger Band
+#  chart01 — Price + EMA + Bollinger Band + BB Signals
 # ════════════════════════════════════════════════════════
-def plot_price_indicators(df, test_start_idx: int,
+def plot_price_bb_signals(df, test_start_idx: int,
                           ticker: str, start_date: str, end_date: str):
-    fig, ax = plt.subplots(figsize=(16, 5))
     close_all = df["Close"].squeeze()
+    fig, ax   = plt.subplots(figsize=(16, 5))
 
     ax.plot(df.index, close_all,    "#2196F3", lw=1.2, label="Close")
-    ax.plot(df.index, df["EMA_20"], "#FF9800", lw=1, ls="--", label="EMA 20 (Monthly)")
-    ax.plot(df.index, df["EMA_60"], "#9C27B0", lw=1, ls="--", label="EMA 60 (Quarterly)")
+    ax.plot(df.index, df["EMA_20"], "#FF9800", lw=1, ls="--", label="EMA 20")
+    ax.plot(df.index, df["EMA_60"], "#9C27B0", lw=1, ls="--", label="EMA 60")
     ax.fill_between(df.index, df["BB_upper"], df["BB_lower"],
                     alpha=0.08, color="green", label="Bollinger Band")
     ax.plot(df.index, df["BB_upper"], "g-", lw=0.7)
@@ -52,274 +73,347 @@ def plot_price_indicators(df, test_start_idx: int,
     ax.axvline(df.index[test_start_idx], color="gray",
                ls=":", lw=1.5, label="Train/Test Split")
 
-    # Mark BB buy signals (close <= lower band) on price chart
-    signal_buy_mask  = df["Signal_buy"] == 1
-    signal_sell_mask = df["Signal_sell"] == 1
-    if signal_buy_mask.any():
-        ax.scatter(df.index[signal_buy_mask],
-                   close_all[signal_buy_mask],
+    buy_mask  = df["Signal_buy"]  == 1
+    sell_mask = df["Signal_sell"] == 1
+    if buy_mask.any():
+        ax.scatter(df.index[buy_mask], close_all[buy_mask],
                    marker="^", color="#4CAF50", s=60, zorder=5,
-                   label="BB Buy Signal (lower band touch)")
-    if signal_sell_mask.any():
-        ax.scatter(df.index[signal_sell_mask],
-                   close_all[signal_sell_mask],
+                   label="BB Buy Signal (▲ lower touch)")
+    if sell_mask.any():
+        ax.scatter(df.index[sell_mask], close_all[sell_mask],
                    marker="v", color="#F44336", s=60, zorder=5,
-                   label="BB Sell Signal (upper band touch)")
+                   label="BB Sell Signal (▼ upper touch)")
 
-    ax.set_title(f"[{ticker}] BB Primary Signal  |  ▲Buy=lower touch  ▼Sell=upper touch  ({start_date} ~ {end_date})")
+    ax.set_title(
+        f"[{ticker}]  Price + EMA + Bollinger Band  "
+        f"▲Buy=lower touch  ▼Sell=upper touch  ({start_date} ~ {end_date})"
+    )
     ax.set_ylabel("Price (TWD)")
     ax.legend(loc="upper left", fontsize=9)
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    _save(fig, "chart1_price_indicators.png")
+    _save(fig, "chart01_price_bb_signals.png")
 
 
 # ════════════════════════════════════════════════════════
-#  Chart 2: LSTM Training Curve
+#  chart02 — LSTM Training Curve (accuracy + loss, twin axis)
 # ════════════════════════════════════════════════════════
 def plot_lstm_training(history_log):
     fig, ax = plt.subplots(figsize=(12, 5))
 
     ax.plot(history_log.history["accuracy"],     "#2196F3", lw=1.5, label="Train Accuracy")
     ax.plot(history_log.history["val_accuracy"], "#FF5722", lw=1.5, ls="--", label="Val Accuracy")
-    ax.set_ylabel("Accuracy")
-    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Accuracy"); ax.set_xlabel("Epoch")
 
-    ax_r = ax.twinx()
-    ax_r.plot(history_log.history["loss"],     "#4CAF50", alpha=0.6, label="Train Loss")
-    ax_r.plot(history_log.history["val_loss"], "#F44336", alpha=0.6, ls="--", label="Val Loss")
-    ax_r.set_ylabel("Loss", color="gray")
+    ax2 = ax.twinx()
+    ax2.plot(history_log.history["loss"],     "#4CAF50", alpha=0.6, label="Train Loss")
+    ax2.plot(history_log.history["val_loss"], "#F44336", alpha=0.6, ls="--", label="Val Loss")
+    ax2.set_ylabel("Loss", color="gray")
 
-    l1, lb1 = ax.get_legend_handles_labels()
-    l2, lb2 = ax_r.get_legend_handles_labels()
-    ax.legend(l1+l2, lb1+lb2, fontsize=9, loc="upper right")
-    ax.set_title("LSTM Training Curve (Accuracy & Loss)")
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax2.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, fontsize=9, loc="upper right")
+    ax.set_title("LSTM Training Curve  (Accuracy & Loss)")
     ax.grid(alpha=0.3)
     fig.tight_layout()
-    _save(fig, "chart2_lstm_training.png")
+    _save(fig, "chart02_lstm_training.png")
 
 
 # ════════════════════════════════════════════════════════
-#  Chart 3: LSTM Prediction
+#  chart03 — LSTM Direction Prediction vs Actual
 # ════════════════════════════════════════════════════════
-def plot_lstm_prediction(df, test_start_idx, y_te,
-                         lstm_preds, lstm_prob,
-                         close_actual, close_pred,
-                         lstm_acc, lstm_rmse, lstm_mape, ticker):
-    test_dates = df.index[test_start_idx: test_start_idx + len(y_te)]
-    fig, axes  = plt.subplots(2, 1, figsize=(14, 8))
+def plot_lstm_direction(test_dates, y_te, lstm_preds, lstm_prob,
+                        lstm_acc: float, ticker: str):
+    fig, ax = plt.subplots(figsize=(14, 5))
 
-    # Close price estimation
-    idx = range(len(close_actual))
-    axes[0].plot(idx, close_actual, "#2196F3", lw=1.5, label="Actual Close")
-    axes[0].plot(idx, close_pred,   "#FF5722", lw=1, ls="--",
-                 label=f"LSTM Estimate  RMSE={lstm_rmse:.2f}  MAPE={lstm_mape:.2f}%")
-    axes[0].fill_between(idx, close_actual, close_pred, alpha=0.12, color="#FF9800")
-    axes[0].set_title(f"LSTM Close Estimation  "
-                      f"Accuracy={lstm_acc:.2%}  RMSE={lstm_rmse:.2f}  MAPE={lstm_mape:.2f}%")
-    axes[0].set_ylabel("Price (TWD)")
-    axes[0].legend(fontsize=9); axes[0].grid(alpha=0.3)
-
-    # Direction prediction
-    axes[1].plot(test_dates, y_te,       "#2196F3", lw=1.5, label="Actual",      alpha=0.7)
-    axes[1].plot(test_dates, lstm_preds, "#FF5722", lw=1,   label="LSTM Pred",   ls="--")
-    axes[1].plot(test_dates, lstm_prob,  "#9E9E9E", lw=0.8, label="LSTM Up Prob")
-    axes[1].axhline(0.5, color="gray", lw=0.8, ls=":")
-    axes[1].set_ylim(-0.1, 1.1)
-    axes[1].set_xlabel("Date")
-    axes[1].set_title("LSTM Up/Down Prediction")
-    axes[1].legend(fontsize=9); axes[1].grid(alpha=0.3)
-
-    fig.suptitle(f"[{ticker}] LSTM Results  (trained on BB buy signal days: close <= BB_lower)",
-                 fontsize=13, fontweight="bold")
-    fig.tight_layout()
-    _save(fig, "chart3_lstm_prediction.png")
-
-
-# ════════════════════════════════════════════════════════
-#  Chart 4: ARIMA Prediction
-# ════════════════════════════════════════════════════════
-def plot_arima_prediction(arima_actual_val, arima_preds_val,
-                          arima_preds_dir, arima_acc,
-                          arima_rmse, arima_mape, ticker):
-    fig, axes = plt.subplots(2, 1, figsize=(14, 8))
-    idx = range(len(arima_actual_val))
-
-    # Close price prediction
-    axes[0].plot(idx, arima_actual_val, "#2196F3", lw=1.5, label="Actual Close")
-    axes[0].plot(idx, arima_preds_val,  "#009688", lw=1, ls="--",
-                 label=f"ARIMA Pred  RMSE={arima_rmse:.2f}  MAPE={arima_mape:.2f}%")
-    axes[0].fill_between(idx, arima_actual_val, arima_preds_val,
-                         alpha=0.12, color="#009688")
-    axes[0].set_title(f"ARIMA Close Prediction  "
-                      f"Dir.Accuracy={arima_acc:.2%}  RMSE={arima_rmse:.2f}  MAPE={arima_mape:.2f}%")
-    axes[0].set_ylabel("Price (TWD)")
-    axes[0].legend(fontsize=9); axes[0].grid(alpha=0.3)
-
-    # Direction
-    true_dir = (arima_actual_val[1:] > arima_actual_val[:-1]).astype(int)
-    axes[1].plot(range(len(true_dir)), true_dir,             "#2196F3", lw=1.5,
-                 label="Actual Dir", alpha=0.7)
-    axes[1].plot(range(len(true_dir)), arima_preds_dir[:-1], "#009688", lw=1, ls="--",
-                 label="ARIMA Dir")
-    axes[1].set_ylim(-0.1, 1.1)
-    axes[1].set_xlabel("Days")
-    axes[1].set_title(f"ARIMA Direction  Accuracy={arima_acc:.2%}")
-    axes[1].legend(fontsize=9); axes[1].grid(alpha=0.3)
-
-    fig.suptitle(f"[{ticker}] ARIMA Results", fontsize=13, fontweight="bold")
-    fig.tight_layout()
-    _save(fig, "chart4_arima_prediction.png")
-
-
-# ════════════════════════════════════════════════════════
-#  Chart 5: Metrics Comparison
-# ════════════════════════════════════════════════════════
-def plot_metrics_comparison(lstm_acc, arima_acc, stack_acc,
-                             lstm_rmse, arima_rmse,
-                             lstm_mape, arima_mape, ticker):
-    fig, axes = plt.subplots(1, 3, figsize=(14, 5))
-    fig.suptitle(
-        f"[{ticker}] Model Metrics Comparison  (BB Signal: mean reversion)\n"
-        f"Higher Accuracy | Lower RMSE & MAPE is better",
-        fontsize=12, fontweight="bold"
-    )
-
-    metrics_data = [
-        ("Accuracy (%)", lstm_acc*100,  arima_acc*100,  stack_acc*100, "higher"),
-        ("RMSE (TWD)",   lstm_rmse,     arima_rmse,     None,          "lower"),
-        ("MAPE (%)",     lstm_mape,     arima_mape,     None,          "lower"),
-    ]
-
-    for i, (metric, lv, av, sv, direction) in enumerate(metrics_data):
-        ax     = axes[i]
-        labels = ["LSTM", "ARIMA", "Stacking"] if sv is not None else ["LSTM", "ARIMA"]
-        values = [lv, av, sv] if sv is not None else [lv, av]
-        colors = ["#FF5722", "#009688", "#9C27B0"][:len(values)]
-
-        bars = ax.bar(labels, values, color=colors, alpha=0.85, width=0.5)
-        for bar, val in zip(bars, values):
-            ax.text(bar.get_x() + bar.get_width()/2,
-                    bar.get_height() + max(values)*0.02,
-                    f"{val:.2f}",
-                    ha="center", va="bottom", fontsize=11, fontweight="bold")
-
-        better_idx = (np.argmax(values) if direction == "higher"
-                      else np.argmin(values))
-        bars[better_idx].set_edgecolor("gold")
-        bars[better_idx].set_linewidth(3)
-
-        ax.set_title(f"{metric}\n({direction} is better)")
-        ax.set_ylabel(metric)
-        ax.grid(axis="y", alpha=0.3)
-
-    fig.tight_layout()
-    _save(fig, "chart5_metrics_comparison.png")
-
-
-# ════════════════════════════════════════════════════════
-#  Chart 6: Stacking Result
-# ════════════════════════════════════════════════════════
-def plot_stacking_result(df, test_start_idx, y_te,
-                         lstm_preds, arima_preds_dir,
-                         stack_pred, stack_prob,
-                         lstm_acc, arima_acc, stack_acc,
-                         meta_model, ticker):
-    # Stacking is computed on aligned signal days only (may be fewer than y_te)
-    # Use the minimum length to avoid shape mismatch
-    n_common   = min(len(stack_pred), len(y_te), len(lstm_preds))
-    test_dates = df.index[test_start_idx: test_start_idx + len(y_te)][:n_common]
-
-    y_te_plot      = y_te[:n_common]
-    lstm_plot      = lstm_preds[:n_common]
-    arima_plot     = arima_preds_dir[:n_common]
-    stack_pred_plt = stack_pred[:n_common]
-    stack_prob_plt = stack_prob[:n_common]
-
-    fig, axes  = plt.subplots(3, 1, figsize=(14, 12))
-    fig.suptitle(
-        f"[{ticker}] Stacking Ensemble  Accuracy={stack_acc:.2%}  (BB Signal days, n={n_common})",
-        fontsize=13, fontweight="bold"
-    )
-
-    # Model prediction comparison
-    ax = axes[0]
-    ax.plot(test_dates, y_te_plot,  "#2196F3", lw=2,   label="Actual",                alpha=0.8)
-    ax.plot(test_dates, lstm_plot,  "#FF5722", lw=1,   label=f"LSTM  ({lstm_acc:.2%})",  ls="--", alpha=0.7)
-    ax.plot(test_dates, arima_plot, "#009688", lw=1,   label=f"ARIMA ({arima_acc:.2%})", ls=":",  alpha=0.7)
-    ax.plot(test_dates, stack_pred_plt, "#9C27B0", lw=1.5, label=f"Stack ({stack_acc:.2%})")
+    ax.plot(test_dates, y_te,       "#2196F3", lw=1.5, label="Actual (1=profit)",   alpha=0.8)
+    ax.plot(test_dates, lstm_preds, "#FF5722", lw=1,   label=f"LSTM Pred",          ls="--")
+    ax.plot(test_dates, lstm_prob,  "#9E9E9E", lw=0.8, label="LSTM Up Probability", alpha=0.7)
+    ax.axhline(0.5, color="gray", lw=0.8, ls=":")
     ax.set_ylim(-0.1, 1.1)
-    ax.set_title("Prediction Comparison: LSTM vs ARIMA vs Stacking  (BB signal days only)")
-    ax.legend(fontsize=10); ax.grid(alpha=0.3)
-
-    # Stacking probability
-    ax = axes[1]
-    ax.plot(test_dates, stack_prob_plt, "#9C27B0", lw=1.2, label="Stacking Up Probability")
-    ax.fill_between(test_dates, stack_prob_plt, 0.5,
-                    where=(stack_prob_plt >= 0.5), alpha=0.2, color="#4CAF50", label="Predicted Up")
-    ax.fill_between(test_dates, stack_prob_plt, 0.5,
-                    where=(stack_prob_plt <  0.5), alpha=0.2, color="#F44336", label="Predicted Down")
-    ax.axhline(0.5, color="gray", lw=1, ls=":")
-    ax.set_ylim(0, 1)
-    ax.set_title("Stacking Up Probability  (1=reversion UP expected, 0=DOWN)")
-    ax.legend(fontsize=9); ax.grid(alpha=0.3)
-
-    # Meta Model weights
-    ax    = axes[2]
-    coefs = [meta_model.coef_[0][0], meta_model.coef_[0][1]]
-    bars  = ax.bar(["LSTM weight", "ARIMA weight"], coefs,
-                   color=["#FF5722", "#009688"], alpha=0.85, width=0.4)
-    for bar, val in zip(bars, coefs):
-        ax.text(bar.get_x() + bar.get_width()/2,
-                bar.get_height() + 0.01,
-                f"{val:.4f}", ha="center", va="bottom",
-                fontsize=12, fontweight="bold")
-    ax.axhline(0, color="gray", lw=0.8, ls="--")
+    ax.set_xlabel("Date"); ax.set_ylabel("Label / Probability")
     ax.set_title(
-        f"Meta Model Weights\n"
-        f"Positive = bullish signal | Negative = bearish signal\n"
-        f"Intercept = {meta_model.intercept_[0]:.4f}"
+        f"[{ticker}]  LSTM Direction Prediction  "
+        f"Accuracy={lstm_acc:.2%}  (BB buy signal days only)"
+    )
+    ax.legend(fontsize=9); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart03_lstm_direction.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart04 — ARIMA Close Price Forecast vs Actual
+# ════════════════════════════════════════════════════════
+def plot_arima_price(arima_actual, arima_pred,
+                     arima_rmse: float, arima_mape: float,
+                     arima_acc: float, ticker: str):
+    idx = range(len(arima_actual))
+    fig, ax = plt.subplots(figsize=(14, 5))
+
+    ax.plot(idx, arima_actual, "#2196F3", lw=1.5, label="Actual Close")
+    ax.plot(idx, arima_pred,   "#009688", lw=1, ls="--",
+            label=f"ARIMA Forecast  RMSE={arima_rmse:.2f}  MAPE={arima_mape:.2f}%")
+    ax.fill_between(idx, arima_actual, arima_pred, alpha=0.12, color="#009688")
+    ax.set_ylabel("Price (TWD)"); ax.set_xlabel("Weeks")
+    ax.set_title(
+        f"[{ticker}]  ARIMA Close Price Forecast  "
+        f"Dir.Acc={arima_acc:.2%}  RMSE={arima_rmse:.2f}  MAPE={arima_mape:.2f}%"
+    )
+    ax.legend(fontsize=9); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart04_arima_price.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart05 — ARIMA Direction Prediction vs Actual
+# ════════════════════════════════════════════════════════
+def plot_arima_direction(arima_actual, arima_preds_dir,
+                         arima_acc: float, ticker: str):
+    true_dir = (arima_actual[1:] > arima_actual[:-1]).astype(int)
+    idx      = range(len(true_dir))
+    fig, ax  = plt.subplots(figsize=(14, 4))
+
+    ax.plot(idx, true_dir,             "#2196F3", lw=1.5, label="Actual Direction", alpha=0.7)
+    ax.plot(idx, arima_preds_dir[:-1], "#009688", lw=1,   label="ARIMA Predicted",  ls="--")
+    ax.axhline(0.5, color="gray", lw=0.8, ls=":")
+    ax.set_ylim(-0.1, 1.1)
+    ax.set_xlabel("Weeks"); ax.set_ylabel("Direction (1=up, 0=down)")
+    ax.set_title(f"[{ticker}]  ARIMA Direction Prediction  Accuracy={arima_acc:.2%}")
+    ax.legend(fontsize=9); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart05_arima_direction.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart06 — Accuracy Comparison: LSTM / ARIMA / Stacking
+# ════════════════════════════════════════════════════════
+def plot_accuracy_comparison(lstm_acc: float, arima_acc: float, stack_acc: float,
+                              ticker: str):
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    labels = ["LSTM", "ARIMA", "Stacking"]
+    values = [lstm_acc * 100, arima_acc * 100, stack_acc * 100]
+    colors = ["#FF5722", "#009688", "#9C27B0"]
+
+    _bar_with_labels(ax, labels, values, colors, direction="higher")
+    ax.axhline(50, color="gray", lw=1, ls=":", label="random baseline 50%")
+    ax.set_ylabel("Accuracy (%)")
+    ax.set_title(
+        f"[{ticker}]  BB Signal Direction Accuracy\n"
+        f"(correctly predicted profitable BB buy signals)"
+    )
+    ax.legend(fontsize=9); ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart06_accuracy.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart07 — RMSE Comparison (ARIMA vs baseline)
+# ════════════════════════════════════════════════════════
+def plot_rmse_comparison(arima_rmse: float, ticker: str):
+    fig, ax = plt.subplots(figsize=(5, 5))
+
+    ax.bar(["ARIMA"], [arima_rmse], color="#009688", alpha=0.85, width=0.4)
+    ax.text(0, arima_rmse + arima_rmse * 0.02,
+            f"{arima_rmse:.2f}", ha="center", va="bottom",
+            fontsize=13, fontweight="bold")
+    ax.set_ylabel("RMSE (TWD)")
+    ax.set_title(
+        f"[{ticker}]  ARIMA Close Price RMSE\n"
+        f"(Root Mean Square Error vs actual close)"
     )
     ax.grid(axis="y", alpha=0.3)
-
     fig.tight_layout()
-    _save(fig, "chart6_stacking_result.png")
+    _save(fig, "chart07_rmse.png")
 
 
 # ════════════════════════════════════════════════════════
-#  Convenience: plot all at once
+#  chart08 — MAPE Comparison
 # ════════════════════════════════════════════════════════
-def plot_all(df, test_start_idx, y_te,
-             lstm_preds, lstm_prob, arima_preds_dir,
-             arima_preds_val, arima_actual_val,
-             stack_pred, stack_prob,
-             close_actual, close_pred_lstm,
-             history_log, meta_model,
-             lstm_acc, arima_acc, stack_acc,
-             lstm_rmse, arima_rmse,
-             lstm_mape, arima_mape,
-             ticker, start_date, end_date):
+def plot_mape_comparison(arima_mape: float, ticker: str):
+    fig, ax = plt.subplots(figsize=(5, 5))
 
+    ax.bar(["ARIMA"], [arima_mape], color="#FF9800", alpha=0.85, width=0.4)
+    ax.text(0, arima_mape + arima_mape * 0.02,
+            f"{arima_mape:.2f}%", ha="center", va="bottom",
+            fontsize=13, fontweight="bold")
+    ax.set_ylabel("MAPE (%)")
+    ax.set_title(
+        f"[{ticker}]  ARIMA Close Price MAPE\n"
+        f"(Mean Absolute Percentage Error)"
+    )
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart08_mape.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart09 — LSTM vs ARIMA vs Stacking Prediction Comparison
+# ════════════════════════════════════════════════════════
+def plot_pred_comparison(test_dates, y_te, lstm_preds, arima_preds_dir,
+                         stack_pred, lstm_acc, arima_acc, stack_acc,
+                         ticker: str):
+    n = min(len(y_te), len(lstm_preds), len(arima_preds_dir), len(stack_pred))
+    fig, ax = plt.subplots(figsize=(14, 5))
+
+    ax.plot(test_dates[:n], y_te[:n],            "#2196F3", lw=2,   label="Actual",                    alpha=0.8)
+    ax.plot(test_dates[:n], lstm_preds[:n],      "#FF5722", lw=1,   label=f"LSTM  ({lstm_acc:.2%})",   ls="--", alpha=0.8)
+    ax.plot(test_dates[:n], arima_preds_dir[:n], "#009688", lw=1,   label=f"ARIMA ({arima_acc:.2%})",  ls=":",  alpha=0.8)
+    ax.plot(test_dates[:n], stack_pred[:n],      "#9C27B0", lw=1.5, label=f"Stack ({stack_acc:.2%})")
+    ax.axhline(0.5, color="gray", lw=0.8, ls=":")
+    ax.set_ylim(-0.1, 1.1)
+    ax.set_xlabel("Date"); ax.set_ylabel("Prediction (1=up, 0=down)")
+    ax.set_title(
+        f"[{ticker}]  LSTM vs ARIMA vs Stacking  (BB signal days)\n"
+        f"LSTM={lstm_acc:.2%}  ARIMA={arima_acc:.2%}  Stack={stack_acc:.2%}"
+    )
+    ax.legend(fontsize=9); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart09_pred_comparison.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart10 — Stacking Up Probability Over Time
+# ════════════════════════════════════════════════════════
+def plot_stacking_prob(test_dates, stack_prob, stack_acc: float, ticker: str):
+    n   = min(len(test_dates), len(stack_prob))
+    fig, ax = plt.subplots(figsize=(14, 4))
+
+    sp = stack_prob[:n]
+    ax.plot(test_dates[:n], sp, "#9C27B0", lw=1.2, label="Stacking Up Probability")
+    ax.fill_between(test_dates[:n], sp, 0.5,
+                    where=(sp >= 0.5), alpha=0.2, color="#4CAF50", label="Predicted Up")
+    ax.fill_between(test_dates[:n], sp, 0.5,
+                    where=(sp <  0.5), alpha=0.2, color="#F44336", label="Predicted Down")
+    ax.axhline(0.5, color="gray", lw=1, ls=":")
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Date"); ax.set_ylabel("Up Probability")
+    ax.set_title(
+        f"[{ticker}]  Stacking Up Probability  Accuracy={stack_acc:.2%}\n"
+        f"(1 = BB reversion UP expected  |  0 = DOWN expected)"
+    )
+    ax.legend(fontsize=9); ax.grid(alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart10_stacking_prob.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart11 — Meta Model Weights (Logistic Regression)
+# ════════════════════════════════════════════════════════
+def plot_meta_weights(meta_model, ticker: str):
+    coefs = [meta_model.coef_[0][0], meta_model.coef_[0][1]]
+    fig, ax = plt.subplots(figsize=(6, 5))
+
+    colors = ["#FF5722" if c >= 0 else "#2196F3" for c in coefs]
+    bars   = ax.bar(["LSTM weight", "ARIMA weight"], coefs,
+                    color=colors, alpha=0.85, width=0.45)
+    for bar, val in zip(bars, coefs):
+        offset = abs(val) * 0.04 + 0.005
+        va     = "bottom" if val >= 0 else "top"
+        y      = bar.get_height() + (offset if val >= 0 else -offset)
+        ax.text(bar.get_x() + bar.get_width() / 2, y,
+                f"{val:.4f}", ha="center", va=va,
+                fontsize=12, fontweight="bold")
+    ax.axhline(0, color="gray", lw=0.8, ls="--")
+    ax.set_ylabel("Coefficient")
+    ax.set_title(
+        f"[{ticker}]  Stacking Meta Model Weights\n"
+        f"Positive=bullish  Negative=bearish  "
+        f"Intercept={meta_model.intercept_[0]:.4f}"
+    )
+    ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart11_meta_weights.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart12 — ARIMA RMSE per Ticker
+# ════════════════════════════════════════════════════════
+def plot_arima_rmse_per_ticker(ticker_stats: list):
+    if not ticker_stats:
+        return
+    tickers   = [s["ticker"].replace(".TW", "") for s in ticker_stats]
+    rmse_vals = [s["arima_rmse"] for s in ticker_stats]
+    avg       = float(np.mean(rmse_vals))
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    bars = ax.bar(tickers, rmse_vals, color="#009688", alpha=0.85, width=0.6)
+    for bar, val in zip(bars, rmse_vals):
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(rmse_vals) * 0.02,
+                f"{val:.1f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    best = int(np.argmin(rmse_vals))
+    bars[best].set_edgecolor("gold"); bars[best].set_linewidth(2.5)
+    ax.axhline(avg, color="red", lw=1.2, ls="--", label=f"avg = {avg:.1f}")
+    ax.set_xlabel("Ticker"); ax.set_ylabel("RMSE (TWD)")
+    ax.set_title("ARIMA Close Price RMSE per Ticker  ↓ lower is better")
+    ax.legend(fontsize=10); ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart12_arima_rmse_per_ticker.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart13 — ARIMA MAPE per Ticker
+# ════════════════════════════════════════════════════════
+def plot_arima_mape_per_ticker(ticker_stats: list):
+    if not ticker_stats:
+        return
+    tickers   = [s["ticker"].replace(".TW", "") for s in ticker_stats]
+    mape_vals = [s["arima_mape"] for s in ticker_stats]
+    avg       = float(np.mean(mape_vals))
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    bars = ax.bar(tickers, mape_vals, color="#FF9800", alpha=0.85, width=0.6)
+    for bar, val in zip(bars, mape_vals):
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(mape_vals) * 0.02,
+                f"{val:.2f}%", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    best = int(np.argmin(mape_vals))
+    bars[best].set_edgecolor("gold"); bars[best].set_linewidth(2.5)
+    ax.axhline(avg, color="red", lw=1.2, ls="--", label=f"avg = {avg:.2f}%")
+    ax.set_xlabel("Ticker"); ax.set_ylabel("MAPE (%)")
+    ax.set_title("ARIMA Close Price MAPE per Ticker  ↓ lower is better")
+    ax.legend(fontsize=10); ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart13_arima_mape_per_ticker.png")
+
+
+# ════════════════════════════════════════════════════════
+#  chart14 — ARIMA Direction Accuracy per Ticker
+# ════════════════════════════════════════════════════════
+def plot_arima_acc_per_ticker(ticker_stats: list):
+    if not ticker_stats:
+        return
+    tickers  = [s["ticker"].replace(".TW", "") for s in ticker_stats]
+    acc_vals = [s["arima_acc"] * 100 for s in ticker_stats]
+    avg      = float(np.mean(acc_vals))
+
+    fig, ax = plt.subplots(figsize=(11, 5))
+    bars = ax.bar(tickers, acc_vals, color="#5C6BC0", alpha=0.85, width=0.6)
+    for bar, val in zip(bars, acc_vals):
+        ax.text(bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.4,
+                f"{val:.1f}%", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    best = int(np.argmax(acc_vals))
+    bars[best].set_edgecolor("gold"); bars[best].set_linewidth(2.5)
+    ax.axhline(50,  color="gray", lw=1, ls=":",  label="random baseline 50%")
+    ax.axhline(avg, color="red",  lw=1.2, ls="--", label=f"avg = {avg:.1f}%")
+    ax.set_xlabel("Ticker"); ax.set_ylabel("Direction Accuracy (%)")
+    ax.set_title("ARIMA Direction Accuracy per Ticker  ↑ higher is better")
+    ax.legend(fontsize=10); ax.grid(axis="y", alpha=0.3)
+    fig.tight_layout()
+    _save(fig, "chart14_arima_acc_per_ticker.png")
+
+
+# ════════════════════════════════════════════════════════
+#  Convenience: plot all per-ticker charts at once
+# ════════════════════════════════════════════════════════
+def plot_arima_metrics_by_ticker(ticker_stats: list):
+    """Called from train.py after multi-ticker training."""
     print(f"\n{'='*55}")
-    print(f"  [Chart] Generating all charts")
+    print(f"  [Chart] Generating per-ticker metric charts")
     print(f"{'='*55}")
-
-    plot_price_indicators(df, test_start_idx, ticker, start_date, end_date)
-    plot_lstm_training(history_log)
-    plot_lstm_prediction(df, test_start_idx, y_te,
-                         lstm_preds, lstm_prob,
-                         close_actual, close_pred_lstm,
-                         lstm_acc, lstm_rmse, lstm_mape, ticker)
-    plot_arima_prediction(arima_actual_val, arima_preds_val,
-                          arima_preds_dir, arima_acc,
-                          arima_rmse, arima_mape, ticker)
-    plot_metrics_comparison(lstm_acc, arima_acc, stack_acc,
-                             lstm_rmse, arima_rmse,
-                             lstm_mape, arima_mape, ticker)
-    plot_stacking_result(df, test_start_idx, y_te,
-                         lstm_preds, arima_preds_dir,
-                         stack_pred, stack_prob,
-                         lstm_acc, arima_acc, stack_acc,
-                         meta_model, ticker)
-
-    print(f"\n  All 6 charts saved to ./{CHART_DIR}/")
+    plot_arima_rmse_per_ticker(ticker_stats)
+    plot_arima_mape_per_ticker(ticker_stats)
+    plot_arima_acc_per_ticker(ticker_stats)
+    print(f"  Charts 12–14 saved to ./{CHART_DIR}/")

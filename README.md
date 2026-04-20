@@ -130,7 +130,7 @@ python train.py
 
 訓練完成後輸出：
 - `models/` — 所有模型檔案
-- `charts/` — 6 張分析圖表
+- `charts/` — 7 張分析圖表（含各標的 RMSE / MAPE）
 
 ### 預測
 
@@ -155,6 +155,7 @@ python predict.py 2454.TW
 | `chart4_arima_prediction.png` | ARIMA 收盤預測 vs 實際 |
 | `chart5_metrics_comparison.png` | LSTM / ARIMA / Stacking 準確率比較 |
 | `chart6_stacking_result.png` | Stacking 預測機率 + Meta Model 權重 |
+| `chart7_arima_per_ticker.png` | **各標的 ARIMA RMSE、MAPE、方向準確率**（多標的模式） |
 
 ---
 
