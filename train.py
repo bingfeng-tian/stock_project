@@ -427,90 +427,35 @@ def main():
     print(f"  [Chart] Generating output charts -> ./charts/")
     print(f"{'='*55}")
 
-    # chart01 — Price + EMA + Bollinger Band + signals (first ticker)
-    if first_ticker_df is not None:
-        chart_mod.plot_price_bb_signals(
-            first_ticker_df,
-            first_ticker_split,
-            first_ticker_name,
-            START_DATE,
-            end_label,
+    has_test = len(y_te_all) > 0 and len(lstm_preds_te) > 0
+
+    # chart01 — Confusion Matrix
+    if has_test and len(stack_pred) > 0:
+        n = min(len(y_te_all), len(lstm_preds_te), len(stack_pred))
+        chart_mod.plot_confusion_matrix(
+            y_te_all[:n], lstm_preds_te[:n], stack_pred[:n],
+            lstm_acc, stack_acc, "Multi-Ticker",
         )
 
-    # chart02 — LSTM training curve
-    if history_log is not None:
-        chart_mod.plot_lstm_training(history_log)
-
-    # chart03 — LSTM direction prediction on test set
-    if len(y_te_all) > 0 and len(lstm_preds_te) > 0:
-        te_indices = np.arange(len(y_te_all))
-        n03 = min(len(te_indices), len(lstm_preds_te), len(lstm_prob_te))
-        chart_mod.plot_lstm_direction(
-            te_indices[:n03],
-            y_te_all[:n03],
-            lstm_preds_te[:n03],
-            lstm_prob_te[:n03],
-            lstm_acc,
-            "Multi-Ticker",
+    # chart02 — ROC Curve + AUC
+    if has_test:
+        chart_mod.plot_roc_curve(
+            y_te_all, lstm_prob_te, stack_prob, "Multi-Ticker"
         )
 
-    # chart04 — ARIMA close price forecast vs actual (first ticker)
-    if first_arima_actual is not None and len(first_arima_actual) > 1:
-        chart_mod.plot_arima_price(
-            first_arima_actual,
-            first_arima_pred,
-            calc_rmse(first_arima_actual, first_arima_pred),
-            calc_mape(first_arima_actual, first_arima_pred),
-            first_arima_acc_val,
-            first_ticker_name,
+    # chart03 — Predicted Probability Distribution
+    if has_test and len(stack_prob) > 0:
+        chart_mod.plot_prob_distribution(
+            y_te_all, stack_prob, stack_acc, "Multi-Ticker"
         )
 
-    # chart05 — ARIMA direction prediction vs actual (first ticker)
-    if first_arima_actual is not None and len(first_arima_actual) > 2:
-        chart_mod.plot_arima_direction(
-            np.array(first_arima_actual),
-            first_arima_dir,
-            first_arima_acc_val,
-            first_ticker_name,
+    # chart04 — Threshold Sensitivity
+    if has_test and len(stack_prob) > 0:
+        chart_mod.plot_threshold_sensitivity(
+            y_te_all, stack_prob, "Multi-Ticker"
         )
 
-    # chart06 — Accuracy comparison: LSTM / ARIMA / Stacking
-    chart_mod.plot_accuracy_comparison(lstm_acc, arima_acc, stack_acc, "Multi-Ticker")
-
-    # chart07 — RMSE bar (average across tickers)
-    chart_mod.plot_rmse_comparison(avg_rmse, "Multi-Ticker Avg")
-
-    # chart08 — MAPE bar (average across tickers)
-    chart_mod.plot_mape_comparison(avg_mape, "Multi-Ticker Avg")
-
-    # chart09 — LSTM vs ARIMA vs Stacking prediction comparison
-    if (len(y_te_all) > 0 and len(lstm_preds_te) > 0
-            and len(arima_te_all) > 0 and len(stack_pred) > 0):
-        te_indices = np.arange(len(y_te_all))
-        n09 = min(len(te_indices), len(lstm_preds_te),
-                  len(arima_te_all), len(stack_pred), len(y_te_all))
-        chart_mod.plot_pred_comparison(
-            te_indices[:n09],
-            y_te_all[:n09],
-            lstm_preds_te[:n09],
-            arima_te_all[:n09],
-            stack_pred[:n09],
-            lstm_acc, arima_acc, stack_acc,
-            "Multi-Ticker",
-        )
-
-    # chart10 — Stacking up probability over time
-    if len(stack_prob) > 0 and len(y_te_all) > 0:
-        te_indices = np.arange(len(stack_prob))
-        chart_mod.plot_stacking_prob(
-            te_indices, stack_prob, stack_acc, "Multi-Ticker"
-        )
-
-    # chart11 — Meta Model weights
-    if meta_model is not None:
-        chart_mod.plot_meta_weights(meta_model, "Multi-Ticker")
-
-    # chart12–14 — Per-ticker ARIMA metrics
+    # chart05–07 — Per-ticker ARIMA metrics
     chart_mod.plot_arima_metrics_by_ticker(ticker_stats)
 
     print(f"\nTraining complete!")

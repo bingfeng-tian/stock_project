@@ -38,7 +38,7 @@
     1,
     2
   ],
-  "saved_at": "2026-04-20 10:48:24",
+  "saved_at": "2026-04-20 10:57:11",
   "train_mode": "multi_ticker_bb_weekly",
   "signal_logic": "buy=close<=BB_lower, sell=close>=BB_upper"
 }
